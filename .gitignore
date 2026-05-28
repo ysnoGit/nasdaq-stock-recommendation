@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+.env
+
+# Credentials / secrets
+*.pem
+*.key
+*.crt
+.aws/
+.pgpass
+
+# Local data files
+data/raw/
+data/processed/
+data/results/
+data/test_results/
+
+# Large data files
+*.parquet
+*.csv
+*.jsonl
+*.log
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+logs/
+*.log
