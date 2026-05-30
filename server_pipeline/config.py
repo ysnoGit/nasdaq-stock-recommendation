@@ -14,7 +14,12 @@ def require_env(name: str, setup_hint: str) -> str:
 
 S3_BUCKET = os.environ.get("S3_BUCKET", "nasdaq-stock-recommendation")
 WRDS_USERNAME = os.environ.get("WRDS_USERNAME")
-AWS_REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
+DEFAULT_AWS_REGION = "ap-northeast-2"
+AWS_REGION = (
+    os.environ.get("AWS_REGION")
+    or os.environ.get("AWS_DEFAULT_REGION")
+    or DEFAULT_AWS_REGION
+)
 
 
 def get_wrds_username() -> str:

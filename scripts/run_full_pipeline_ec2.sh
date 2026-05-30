@@ -2,6 +2,9 @@
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$HOME/projects/nasdaq-stock-recommendation}"
+AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-ap-northeast-2}}"
+AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-$AWS_REGION}"
+export AWS_REGION AWS_DEFAULT_REGION
 
 cd "$REPO_ROOT"
 

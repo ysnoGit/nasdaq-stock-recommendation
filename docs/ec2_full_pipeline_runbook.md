@@ -58,6 +58,23 @@ source ~/.bashrc
 
 Do not store the WRDS password in this repository.
 
+## Configure AWS Region
+
+The S3 bucket is in `ap-northeast-2`. Set both AWS region variables so boto3, AWS CLI, and DuckDB/httpfs agree:
+
+```bash
+export AWS_REGION="ap-northeast-2"
+export AWS_DEFAULT_REGION="ap-northeast-2"
+```
+
+Make them persistent:
+
+```bash
+echo 'export AWS_REGION="ap-northeast-2"' >> ~/.bashrc
+echo 'export AWS_DEFAULT_REGION="ap-northeast-2"' >> ~/.bashrc
+source ~/.bashrc
+```
+
 ## Configure ~/.pgpass
 
 Expected format:
@@ -80,7 +97,7 @@ The pipeline checks that `~/.pgpass` exists and has safe permissions before open
 bash scripts/check_ec2_environment.sh
 ```
 
-This checks Python, pip, venv state, required imports, `WRDS_USERNAME`, `~/.pgpass`, AWS identity, and S3 bucket access.
+This checks Python, pip, venv state, required imports, `WRDS_USERNAME`, `~/.pgpass`, configured AWS region, bucket region, AWS identity, and S3 bucket access.
 
 ## Run The Full Pipeline
 
