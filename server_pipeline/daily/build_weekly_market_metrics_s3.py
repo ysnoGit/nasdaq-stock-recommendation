@@ -14,6 +14,9 @@ from server_pipeline.config import S3_BUCKET, RAW_DAILY_PREFIX, WEEKLY_MARKET_ME
 from server_pipeline.s3_duckdb import connect_duckdb_with_s3
 
 
+MIN_WEEKLY_COVERAGE_RATIO = 0.9
+
+
 def list_raw_objects() -> list[str]:
     s3 = boto3.client("s3")
     paginator = s3.get_paginator("list_objects_v2")
@@ -133,6 +136,105 @@ def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:
         Key=s3_key,
         Body=buffer.getvalue(),
     )
+
+
+def delete_s3_prefix(s3, prefix: str) -> None:
+    print(f"Deleting S3 prefix before weekly upload: s3://{S3_BUCKET}/{prefix}")
+
+    paginator = s3.get_paginator("list_objects_v2")
+    keys_to_delete = []
+
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+        keys_to_delete.extend(obj["Key"] for obj in page.get("Contents", []))
+
+    if not keys_to_delete:
+        print("  No existing objects found.")
+        return
+
+    for index in range(0, len(keys_to_delete), 1000):
+        batch = keys_to_delete[index:index + 1000]
+        s3.delete_objects(
+            Bucket=S3_BUCKET,
+            Delete={"Objects": [{"Key": key} for key in batch]},
+        )
+
+    print(f"  Deleted {len(keys_to_delete):,} objects.")
+
+
+def legacy_week_end_prefixes_for_week(s3, week_start_date) -> list[str]:
+    week_start = pd.to_datetime(week_start_date).date()
+    week_end = week_start + timedelta(days=6)
+    candidate_years = sorted({week_start.year, week_end.year})
+    legacy_pattern = re.compile(
+        rf"{WEEKLY_MARKET_METRICS_PREFIX}/year=\d{{4}}/"
+        r"week_end_date=(\d{4}-\d{2}-\d{2})/$"
+    )
+
+    legacy_prefixes = []
+    for year in candidate_years:
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(
+            Bucket=S3_BUCKET,
+            Prefix=f"{WEEKLY_MARKET_METRICS_PREFIX}/year={year}/week_end_date=",
+            Delimiter="/",
+        ):
+            for item in page.get("CommonPrefixes", []):
+                prefix = item["Prefix"]
+                match = legacy_pattern.match(prefix)
+                if not match:
+                    continue
+
+                legacy_date = pd.to_datetime(match.group(1)).date()
+                legacy_week_start = legacy_date - timedelta(days=legacy_date.weekday())
+                if legacy_week_start == week_start:
+                    legacy_prefixes.append(prefix)
+
+    return sorted(set(legacy_prefixes))
+
+
+def validate_weekly_output(df: pd.DataFrame) -> None:
+    if df.empty:
+        raise RuntimeError("Weekly market metrics output is empty.")
+
+    ticker_week_duplicates = df.duplicated(["ticker", "week_start_date"]).sum()
+    if ticker_week_duplicates:
+        raise RuntimeError(
+            "Weekly validation failed: duplicate ticker-week rows found: "
+            f"{ticker_week_duplicates:,}"
+        )
+
+    security_week_duplicates = df.duplicated(["gvkey", "iid", "week_start_date"]).sum()
+    if security_week_duplicates:
+        raise RuntimeError(
+            "Weekly validation failed: duplicate gvkey-iid-week rows found: "
+            f"{security_week_duplicates:,}"
+        )
+
+    week_partition_counts = (
+        df.groupby("week_start_date")["week_end_date"]
+        .nunique()
+        .reset_index(name="week_end_count")
+    )
+    bad_partitions = week_partition_counts[week_partition_counts["week_end_count"] > 1]
+    if not bad_partitions.empty:
+        raise RuntimeError(
+            "Weekly validation failed: multiple week_end_date values for one "
+            f"week_start_date:\n{bad_partitions.to_string(index=False)}"
+        )
+
+    weekly_counts = df.groupby("week_start_date")["ticker"].nunique().sort_index()
+    expected_coverage = int(weekly_counts.max() * MIN_WEEKLY_COVERAGE_RATIO)
+    low_coverage = weekly_counts[weekly_counts < expected_coverage]
+
+    print("\nWeekly partition validation")
+    print(f"Weekly partitions: {len(weekly_counts):,}")
+    print(f"Ticker coverage range: {weekly_counts.min():,} to {weekly_counts.max():,}")
+    print(f"Coverage warning threshold: {expected_coverage:,}")
+
+    if not low_coverage.empty:
+        print("WARNING: completed weekly partitions below expected ticker coverage:")
+        for week_start_date, ticker_count in low_coverage.items():
+            print(f"  {week_start_date}: {ticker_count:,} tickers")
 
 
 def main() -> None:
@@ -350,9 +452,9 @@ def main() -> None:
     ),
 
     target_weeks AS (
-        SELECT DISTINCT week_end_date
+        SELECT DISTINCT week_start_date
         FROM with_previous
-        ORDER BY week_end_date DESC
+        ORDER BY week_start_date DESC
         LIMIT {args.target_weeks}
     ),
 
@@ -403,11 +505,12 @@ def main() -> None:
                 THEN TRUE ELSE FALSE
             END AS flag_h,
 
+            DATE '{latest_date_sql}' AS data_as_of_date,
             TIMESTAMP '{created_at}' AS created_at
 
         FROM with_previous AS w
         INNER JOIN target_weeks AS t
-          ON w.week_end_date = t.week_end_date
+          ON w.week_start_date = t.week_start_date
     )
 
     SELECT *
@@ -421,18 +524,38 @@ def main() -> None:
     print("Incremental weekly market metrics summary")
     print(f"Output rows: {len(df):,}")
     print(f"Unique tickers: {df['ticker'].nunique():,}")
-    print(f"Week date range: {df['week_end_date'].min()} to {df['week_end_date'].max()}")
-    print(f"Duplicate gvkey-iid-week: {df.duplicated(['gvkey', 'iid', 'week_end_date']).sum():,}")
+    print(f"Week start range: {df['week_start_date'].min()} to {df['week_start_date'].max()}")
+    print(f"Week end range: {df['week_end_date'].min()} to {df['week_end_date'].max()}")
+    print(f"Data as of date: {df['data_as_of_date'].max()}")
+    print(f"Duplicate ticker-week: {df.duplicated(['ticker', 'week_start_date']).sum():,}")
+    print(f"Duplicate gvkey-iid-week: {df.duplicated(['gvkey', 'iid', 'week_start_date']).sum():,}")
     print(f"flag_g count: {int(df['flag_g'].sum())}")
     print(f"flag_h count: {int(df['flag_h'].sum())}")
 
-    for week_end_date, week_df in df.groupby("week_end_date"):
-        week_str = pd.to_datetime(week_end_date).strftime("%Y-%m-%d")
+    validate_weekly_output(df)
+
+    s3 = boto3.client("s3")
+    for week_start_date, week_df in df.groupby("week_start_date"):
+        week_str = pd.to_datetime(week_start_date).strftime("%Y-%m-%d")
         year = week_str[:4]
+        partition_prefix = (
+            f"{WEEKLY_MARKET_METRICS_PREFIX}/"
+            f"year={year}/week_start_date={week_str}/"
+        )
+
+        delete_s3_prefix(s3, partition_prefix)
+        for legacy_prefix in legacy_week_end_prefixes_for_week(s3, week_start_date):
+            delete_s3_prefix(s3, legacy_prefix)
+        remaining_legacy_prefixes = legacy_week_end_prefixes_for_week(s3, week_start_date)
+        if remaining_legacy_prefixes:
+            raise RuntimeError(
+                "Weekly validation failed: old same-week week_end_date prefixes "
+                "remain after cleanup:\n"
+                + "\n".join(f"s3://{S3_BUCKET}/{prefix}" for prefix in remaining_legacy_prefixes)
+            )
 
         s3_key = (
-            f"{WEEKLY_MARKET_METRICS_PREFIX}/"
-            f"year={year}/week_end_date={week_str}/"
+            f"{partition_prefix}"
             f"weekly_market_metrics_{week_str}.parquet"
         )
 

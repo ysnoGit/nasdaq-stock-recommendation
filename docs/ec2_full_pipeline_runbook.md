@@ -129,6 +129,14 @@ s3://nasdaq-stock-recommendation/results/screening_results/<param_tag>/screening
 s3://nasdaq-stock-recommendation/results/screening_results/<param_tag>/screening_results.csv
 ```
 
+Weekly market metrics use `week_start_date` as the stable S3 partition key:
+
+```text
+s3://nasdaq-stock-recommendation/processed/weekly_market_metrics/year=YYYY/week_start_date=YYYY-MM-DD/weekly_market_metrics_YYYY-MM-DD.parquet
+```
+
+The file still includes `week_end_date`, `security_week_last_trade_date`, and `data_as_of_date` columns. Re-running the weekly step during the same trading week overwrites the same `week_start_date` partition and logs any old same-week `week_end_date` prefixes it deletes.
+
 ## Verify S3 Output
 
 ```bash

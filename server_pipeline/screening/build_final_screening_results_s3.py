@@ -51,7 +51,7 @@ def list_daily_metric_paths() -> list[str]:
 def list_weekly_metric_paths() -> list[str]:
     pattern = re.compile(
         rf"{WEEKLY_MARKET_METRICS_PREFIX}/year=\d{{4}}/"
-        r"week_end_date=\d{4}-\d{2}-\d{2}/weekly_market_metrics_\d{4}-\d{2}-\d{2}\.parquet$"
+        r"week_start_date=\d{4}-\d{2}-\d{2}/weekly_market_metrics_\d{4}-\d{2}-\d{2}\.parquet$"
     )
     return list_partitioned_parquet_paths(WEEKLY_MARKET_METRICS_PREFIX, pattern)
 
