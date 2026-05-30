@@ -6,16 +6,16 @@ import sys
 import boto3
 import pandas as pd
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from config import (
+from server_pipeline.config import (
     S3_BUCKET,
     RAW_ANNUAL_PREFIX,
     RAW_QUARTERLY_PREFIX,
     ANNUAL_GROWTH_HISTORY_PREFIX,
     QUARTERLY_GROWTH_HISTORY_PREFIX,
 )
-from s3_duckdb import connect_duckdb_with_s3
+from server_pipeline.s3_duckdb import connect_duckdb_with_s3
 
 
 def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:

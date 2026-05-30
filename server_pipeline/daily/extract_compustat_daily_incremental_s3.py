@@ -1,17 +1,17 @@
 import argparse
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
+import sys
+from typing import Any
 
 import boto3
 import pandas as pd
-import wrds
 
-import sys
-from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-
-from config import S3_BUCKET, WRDS_USERNAME, RAW_DAILY_PREFIX
+from server_pipeline.config import S3_BUCKET, RAW_DAILY_PREFIX
+from server_pipeline.utils.wrds_connection import get_wrds_connection
 
 
 def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:
@@ -27,7 +27,7 @@ def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:
     )
 
 
-def get_latest_trading_dates(conn: wrds.Connection, lookback_days: int) -> list[str]:
+def get_latest_trading_dates(conn: Any, lookback_days: int) -> list[str]:
     query = f"""
         select distinct datadate
         from comp.secd
@@ -50,7 +50,7 @@ def get_latest_trading_dates(conn: wrds.Connection, lookback_days: int) -> list[
     )
 
 
-def download_one_date(conn: wrds.Connection, date_str: str) -> None:
+def download_one_date(conn: Any, date_str: str) -> None:
     query = f"""
         select
             datadate as date,
@@ -126,7 +126,7 @@ def main() -> None:
     args = parser.parse_args()
 
     print("Connecting to WRDS...")
-    conn = wrds.Connection(wrds_username=WRDS_USERNAME)
+    conn = get_wrds_connection()
 
     try:
         dates = get_latest_trading_dates(conn, args.lookback_days)

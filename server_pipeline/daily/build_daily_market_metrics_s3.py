@@ -8,10 +8,10 @@ import sys
 import boto3
 import pandas as pd
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from config import S3_BUCKET, RAW_DAILY_PREFIX, DAILY_MARKET_METRICS_PREFIX
-from s3_duckdb import connect_duckdb_with_s3
+from server_pipeline.config import S3_BUCKET, RAW_DAILY_PREFIX, DAILY_MARKET_METRICS_PREFIX
+from server_pipeline.s3_duckdb import connect_duckdb_with_s3
 
 
 def list_raw_objects():

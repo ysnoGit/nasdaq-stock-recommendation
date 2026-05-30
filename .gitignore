@@ -17,6 +17,8 @@ env/
 .pgpass
 
 # Local data files
+data/
+outputs/
 data/raw/
 data/processed/
 data/results/
@@ -25,6 +27,8 @@ data/test_results/
 # Large data files
 *.parquet
 *.csv
+*.duckdb
+*.db
 *.jsonl
 *.log
 

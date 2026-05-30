@@ -7,14 +7,14 @@ import pandas as pd
 import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from config import (
+from server_pipeline.config import (
     S3_BUCKET,
     DAILY_MARKET_METRICS_PREFIX,
     RECENT_DAILY_VOLUME_METRICS_PREFIX,
 )
-from s3_duckdb import connect_duckdb_with_s3
+from server_pipeline.s3_duckdb import connect_duckdb_with_s3
 
 
 def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:

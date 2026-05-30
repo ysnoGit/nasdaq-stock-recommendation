@@ -3,19 +3,19 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 import sys
+from typing import Any
 
 import boto3
 import pandas as pd
-import wrds
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from config import (
+from server_pipeline.config import (
     S3_BUCKET,
-    WRDS_USERNAME,
     RAW_ANNUAL_PREFIX,
     RAW_QUARTERLY_PREFIX,
 )
+from server_pipeline.utils.wrds_connection import get_wrds_connection
 
 
 def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:
@@ -57,7 +57,7 @@ def validate_quarterly(df: pd.DataFrame) -> None:
     )
 
 
-def download_annual(conn: wrds.Connection, annual_start_year: int) -> pd.DataFrame:
+def download_annual(conn: Any, annual_start_year: int) -> pd.DataFrame:
     query = f"""
         select
             gvkey,
@@ -105,7 +105,7 @@ def download_annual(conn: wrds.Connection, annual_start_year: int) -> pd.DataFra
     return df
 
 
-def download_quarterly(conn: wrds.Connection, quarterly_start_date: str) -> pd.DataFrame:
+def download_quarterly(conn: Any, quarterly_start_date: str) -> pd.DataFrame:
     query = f"""
         select
             gvkey,
@@ -176,7 +176,7 @@ def main() -> None:
     extract_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     print("Connecting to WRDS...")
-    conn = wrds.Connection(wrds_username=WRDS_USERNAME)
+    conn = get_wrds_connection()
 
     try:
         annual_df = download_annual(conn, args.annual_start_year)

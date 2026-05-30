@@ -3,9 +3,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def require_env(name: str, setup_hint: str) -> str:
+    value = os.environ.get(name)
+    if value:
+        return value
+
+    raise RuntimeError(f"{name} is not set. Run:\n{setup_hint}")
+
+
 S3_BUCKET = os.environ.get("S3_BUCKET", "nasdaq-stock-recommendation")
-WRDS_USERNAME = os.environ["WRDS_USERNAME"]
+WRDS_USERNAME = os.environ.get("WRDS_USERNAME")
 AWS_REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
+
+
+def get_wrds_username() -> str:
+    return require_env(
+        "WRDS_USERNAME",
+        'export WRDS_USERNAME="your_wrds_username"',
+    )
 
 RAW_DAILY_PREFIX = "raw/compustat_daily_security"
 RAW_ANNUAL_PREFIX = "raw/compustat_annual"

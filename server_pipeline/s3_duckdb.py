@@ -1,7 +1,7 @@
-import boto3
 import duckdb
+import boto3
 
-from config import AWS_REGION
+from server_pipeline.config import AWS_REGION
 
 
 def connect_duckdb_with_s3() -> duckdb.DuckDBPyConnection:
