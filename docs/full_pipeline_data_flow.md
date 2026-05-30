@@ -222,6 +222,8 @@ results/screening_results/<param_tag>/screening_results.parquet
 results/screening_results/<param_tag>/screening_results.csv
 ```
 
+By default, these main output files apply a universe-quality filter that removes likely non-operating securities such as SPACs, acquisition companies, redeemable securities, warrants, rights, and units. The filter is applied only in the final screening layer; raw and processed data remain unfiltered for auditability.
+
 The default parameter folder is:
 
 ```text
@@ -254,6 +256,69 @@ Major final flags:
 
 The default strict screening can return zero full-pass `flag_all` candidates. That is not necessarily a pipeline failure. Intermediate flag counts such as `flag_ab`, `flag_cd`, `flag_f`, or `flag_h` still show that each signal component is producing output. Relaxed screening parameters can be used to inspect broader candidate sets.
 
+### Universe-Quality Filter
+
+The universe-quality filter is implemented in `server_pipeline/screening/build_final_screening_results_s3.py` after the full candidate table is built and before the main output is written.
+
+The filter currently checks available text fields including `ticker`, `company_name`, and `iid`. It excludes rows matching specific security-type patterns:
+
+- `-REDH` or `REDH`
+- `REDEEM` or `REDEEMABLE`
+- `WARRANT` or `WARRANTS`
+- `RIGHT` or `RIGHTS`
+- `UNIT` or `UNITS`
+- `ACQUISITION`, `ACQ`, `ACQ.`, `ACQUTN`
+- `BLANK CHECK`
+- `SPAC`
+
+The filter intentionally does not use broad words such as `CAPITAL`, because those can appear in normal operating company names.
+
+The script adds two audit columns before filtering:
+
+- `is_excluded_universe`
+- `exclusion_reason`
+
+Main filtered outputs:
+
+```text
+results/screening_results/<param_tag>/screening_results.parquet
+results/screening_results/<param_tag>/screening_results.csv
+```
+
+Excluded-universe audit outputs:
+
+```text
+results/screening_results/<param_tag>/excluded_universe/excluded_universe.parquet
+results/screening_results/<param_tag>/excluded_universe/excluded_universe.csv
+```
+
+Screening summary output:
+
+```text
+results/screening_results/<param_tag>/screening_summary.json
+```
+
+The summary includes row counts before and after filtering, excluded row count, flag counts before and after filtering, `flag_all` counts, and top exclusion reasons.
+
+To disable the filter for comparison:
+
+```bash
+python3 server_pipeline/screening/build_final_screening_results_s3.py --disable-universe-filter
+```
+
+To also write unfiltered comparison snapshots:
+
+```bash
+python3 server_pipeline/screening/build_final_screening_results_s3.py --write-unfiltered-audit
+```
+
+Unfiltered comparison snapshots are written to:
+
+```text
+results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.parquet
+results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.csv
+```
+
 ## Data Grain Table
 
 | Dataset | Grain |
@@ -284,6 +349,9 @@ The default strict screening can return zero full-pass `flag_all` candidates. Th
 | Recent daily volume metrics | `processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet` | Single snapshot file |
 | Final screening Parquet | `results/screening_results/<param_tag>/screening_results.parquet` | Parameter folder |
 | Final screening CSV | `results/screening_results/<param_tag>/screening_results.csv` | Parameter folder |
+| Excluded universe audit | `results/screening_results/<param_tag>/excluded_universe/excluded_universe.parquet`; `results/screening_results/<param_tag>/excluded_universe/excluded_universe.csv` | Parameter folder |
+| Screening summary | `results/screening_results/<param_tag>/screening_summary.json` | Parameter folder |
+| Optional unfiltered comparison | `results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.parquet`; `results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.csv` | Parameter folder |
 
 ## Validation Checks Table
 
@@ -295,7 +363,7 @@ The default strict screening can return zero full-pass `flag_all` candidates. Th
 | Daily market metrics | Selected files, target dates, output rows, unique tickers, date range, duplicate `gvkey/iid/date`, helper flag counts |
 | Weekly market metrics | Selected files, row counts, unique tickers, week ranges, duplicate ticker-week, duplicate `gvkey/iid/week_start_date`, one week end per week start, ticker coverage warning, old prefix cleanup logging |
 | Recent daily volume metrics | Number of input daily partitions, output rows, unique tickers, date range, latest date |
-| Final screening | Input partition counts, parameter values, row count, screening date, unique tickers, counts for every screening flag |
+| Final screening | Input partition counts, parameter values, row counts before and after universe filtering, excluded-universe count, screening date, unique tickers, counts for every screening flag before and after filtering, top exclusion reasons |
 
 ## Known Design Choices
 
@@ -303,6 +371,7 @@ The default strict screening can return zero full-pass `flag_all` candidates. Th
 - `recent_daily_volume_metrics` is intentionally kept as a single feature snapshot file because it represents the current recent-volume feature layer for downstream inspection and screening support.
 - The final screening default thresholds are strict and can return zero `flag_all` candidates.
 - Relaxed screening parameters can be used to inspect broader candidate sets, for example lower `--n-pct`, lower `--q`, or shorter annual/quarterly lookbacks.
+- The universe-quality filter is applied in the final screening layer, not during raw extraction, so excluded securities remain auditable in raw and processed data.
 - `server_pipeline/` is the current EC2/S3-backed implementation. Some files under `scripts/` are older local utilities or one-off checks and are not part of the current full runner.
 
 ## Current Limitations
@@ -312,6 +381,7 @@ The default strict screening can return zero full-pass `flag_all` candidates. Th
 - `recent_daily_volume_metrics` is produced as a snapshot file, not a partitioned historical feature table.
 - The final screening script currently joins daily metrics, weekly metrics, and fundamental growth histories directly; the recent volume snapshot is produced as a supporting feature layer but is not currently a separate input to the final screening SQL.
 - The default final screen can be too strict for demonstration if no `flag_all` candidates appear.
+- The universe-quality filter is regex based and uses available text fields. It is configurable and auditable, but it may still require occasional review as new security naming patterns appear.
 
 ## Next Improvement Ideas
 

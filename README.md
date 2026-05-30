@@ -10,6 +10,8 @@ The current pipeline follows a `raw -> processed -> results` data layout in S3:
 - `processed/`: reusable feature tables for fundamental growth, daily market metrics, weekly market metrics, and recent daily volume metrics.
 - `results/`: final parameterized screening outputs in Parquet and CSV.
 
+Final screening applies a default universe-quality filter to remove likely non-operating securities such as SPACs, acquisition companies, redeemable securities, warrants, rights, and units. Excluded rows are written to audit files under the same `results/screening_results/<param_tag>/` folder, and the filter can be disabled for comparison with `--disable-universe-filter`.
+
 Main EC2/S3 runner:
 
 ```bash
