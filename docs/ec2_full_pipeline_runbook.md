@@ -122,7 +122,12 @@ python3 server_pipeline/run_full_pipeline.py --only transform
 python3 server_pipeline/run_full_pipeline.py --only screening
 ```
 
-The screening group currently contains a TODO placeholder because the existing screening implementation is still under `scripts/build_final_screening_results.py` and is not yet an S3-ready `server_pipeline` step.
+The runner writes final screening results to:
+
+```text
+s3://nasdaq-stock-recommendation/results/screening_results/<param_tag>/screening_results.parquet
+s3://nasdaq-stock-recommendation/results/screening_results/<param_tag>/screening_results.csv
+```
 
 ## Verify S3 Output
 
@@ -135,6 +140,13 @@ Known raw fundamentals outputs:
 ```text
 s3://nasdaq-stock-recommendation/raw/compustat_annual/latest/compustat_annual.parquet
 s3://nasdaq-stock-recommendation/raw/compustat_quarterly/latest/compustat_quarterly.parquet
+```
+
+Known final screening outputs:
+
+```text
+s3://nasdaq-stock-recommendation/results/screening_results/n10_annual3_quarter4_q5_m3/screening_results.parquet
+s3://nasdaq-stock-recommendation/results/screening_results/n10_annual3_quarter4_q5_m3/screening_results.csv
 ```
 
 ## Troubleshooting

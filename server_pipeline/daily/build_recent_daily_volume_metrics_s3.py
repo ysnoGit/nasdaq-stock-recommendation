@@ -1,11 +1,12 @@
+import argparse
+import re
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
+import sys
 
 import boto3
 import pandas as pd
-
-import sys
-from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
@@ -15,6 +16,33 @@ from server_pipeline.config import (
     RECENT_DAILY_VOLUME_METRICS_PREFIX,
 )
 from server_pipeline.s3_duckdb import connect_duckdb_with_s3
+
+
+def list_daily_metric_paths() -> list[str]:
+    s3 = boto3.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+    date_pattern = re.compile(
+        rf"{DAILY_MARKET_METRICS_PREFIX}/year=\d{{4}}/month=\d{{2}}/"
+        r"date=\d{4}-\d{2}-\d{2}/daily_market_metrics_\d{4}-\d{2}-\d{2}\.parquet$"
+    )
+
+    paths = []
+    for page in paginator.paginate(
+        Bucket=S3_BUCKET,
+        Prefix=f"{DAILY_MARKET_METRICS_PREFIX}/",
+    ):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if date_pattern.match(key):
+                paths.append(f"s3://{S3_BUCKET}/{key}")
+
+    if not paths:
+        raise RuntimeError(
+            "No date-partitioned daily market metrics found under "
+            f"s3://{S3_BUCKET}/{DAILY_MARKET_METRICS_PREFIX}/"
+        )
+
+    return sorted(paths)
 
 
 def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:
@@ -30,12 +58,24 @@ def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Build recent daily volume metrics from S3 daily metric partitions."
+    )
+    parser.add_argument(
+        "--lookback-months",
+        type=int,
+        default=3,
+        help="Calendar-month lookback from the latest daily metric date.",
+    )
+    args = parser.parse_args()
+
     print("Building recent daily volume metrics from S3...")
 
-    input_path = (
-        f"s3://{S3_BUCKET}/"
-        f"{DAILY_MARKET_METRICS_PREFIX}/daily_market_metrics.parquet"
-    )
+    input_paths = list_daily_metric_paths()
+    print(f"Daily metric partitions found: {len(input_paths):,}")
+    print("First few input paths:")
+    for path in input_paths[:10]:
+        print(f"  {path}")
 
     created_at = datetime.now(timezone.utc).isoformat()
 
@@ -44,7 +84,7 @@ def main() -> None:
     query = f"""
     WITH max_date AS (
         SELECT MAX(CAST(date AS DATE)) AS latest_date
-        FROM read_parquet('{input_path}')
+        FROM read_parquet({input_paths}, union_by_name = true)
     ),
 
     recent_base AS (
@@ -65,10 +105,10 @@ def main() -> None:
             d.flag_e,
             d.flag_f,
             m.latest_date,
-            m.latest_date - INTERVAL '3 months' AS window_start_date
-        FROM read_parquet('{input_path}') AS d
+            m.latest_date - INTERVAL '{args.lookback_months} months' AS window_start_date
+        FROM read_parquet({input_paths}, union_by_name = true) AS d
         CROSS JOIN max_date AS m
-        WHERE CAST(d.date AS DATE) >= m.latest_date - INTERVAL '3 months'
+        WHERE CAST(d.date AS DATE) >= m.latest_date - INTERVAL '{args.lookback_months} months'
           AND CAST(d.date AS DATE) <= m.latest_date
           AND d.volume_ratio IS NOT NULL
     )

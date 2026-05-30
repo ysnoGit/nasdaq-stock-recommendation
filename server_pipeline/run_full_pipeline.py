@@ -52,21 +52,11 @@ PIPELINE_STEPS = [
         name="Build recent daily volume metrics",
         group="transform",
         script=Path("server_pipeline/daily/build_recent_daily_volume_metrics_s3.py"),
-        enabled=False,
-        todo=(
-            "TODO: update this script to read the date-partitioned daily market "
-            "metrics written by build_daily_market_metrics_s3.py."
-        ),
     ),
     PipelineStep(
         name="Build final screening results",
         group="screening",
-        script=None,
-        enabled=False,
-        todo=(
-            "TODO: port scripts/build_final_screening_results.py to server_pipeline "
-            "and make it read/write S3 paths before enabling it here."
-        ),
+        script=Path("server_pipeline/screening/build_final_screening_results_s3.py"),
     ),
 ]
 

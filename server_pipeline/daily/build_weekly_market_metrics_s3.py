@@ -248,6 +248,14 @@ def main() -> None:
         FROM dedup
     ),
 
+    market_weeks AS (
+        SELECT
+            DATE_TRUNC('week', date) AS week_start_date,
+            MAX(date) AS market_week_end_date
+        FROM dedup
+        GROUP BY DATE_TRUNC('week', date)
+    ),
+
     weekly_close AS (
         SELECT
             gvkey,
@@ -255,14 +263,17 @@ def main() -> None:
             ticker,
             company_name,
             currency,
-            CAST(week_start_date AS DATE) AS week_start_date,
-            date AS week_end_date,
+            CAST(w.week_start_date AS DATE) AS week_start_date,
+            mw.market_week_end_date AS week_end_date,
+            w.date AS security_week_last_trade_date,
 
-            adjusted_close_price AS weekly_close_price,
-            close_price_raw AS weekly_close_price_raw
+            w.adjusted_close_price AS weekly_close_price,
+            w.close_price_raw AS weekly_close_price_raw
 
-        FROM weekly_ranked
-        WHERE rn_week = 1
+        FROM weekly_ranked AS w
+        INNER JOIN market_weeks AS mw
+          ON w.week_start_date = mw.week_start_date
+        WHERE w.rn_week = 1
     ),
 
     weekly_ma AS (
@@ -357,6 +368,7 @@ def main() -> None:
 
             w.weekly_close_price,
             w.weekly_close_price_raw,
+            w.security_week_last_trade_date,
 
             w.wma5,
             w.wma10,
