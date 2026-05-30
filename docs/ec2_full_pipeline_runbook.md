@@ -137,6 +137,20 @@ s3://nasdaq-stock-recommendation/processed/weekly_market_metrics/year=YYYY/week_
 
 The file still includes `week_end_date`, `security_week_last_trade_date`, and `data_as_of_date` columns. Re-running the weekly step during the same trading week overwrites the same `week_start_date` partition and logs any old same-week `week_end_date` prefixes it deletes.
 
+If legacy `week_end_date=...` folders still appear from earlier runs, remove them with:
+
+```bash
+python3 server_pipeline/daily/build_weekly_market_metrics_s3.py --cleanup-legacy-week-end
+```
+
+The cleanup command logs each exact S3 prefix before deleting it.
+
+To rebuild a larger weekly history into the stable `week_start_date=...` layout, pass a start date. For example, `2025-10-10` belongs to `week_start_date=2025-10-06`:
+
+```bash
+python3 server_pipeline/daily/build_weekly_market_metrics_s3.py --start-week-date 2025-10-10
+```
+
 ## Verify S3 Output
 
 ```bash

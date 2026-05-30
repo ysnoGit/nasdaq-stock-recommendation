@@ -139,7 +139,7 @@ def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:
 
 
 def delete_s3_prefix(s3, prefix: str) -> None:
-    print(f"Deleting S3 prefix before weekly upload: s3://{S3_BUCKET}/{prefix}")
+    print(f"Deleting S3 prefix: s3://{S3_BUCKET}/{prefix}")
 
     paginator = s3.get_paginator("list_objects_v2")
     keys_to_delete = []
@@ -159,6 +159,64 @@ def delete_s3_prefix(s3, prefix: str) -> None:
         )
 
     print(f"  Deleted {len(keys_to_delete):,} objects.")
+
+
+def list_legacy_week_end_prefixes(s3) -> list[str]:
+    legacy_pattern = re.compile(
+        rf"{WEEKLY_MARKET_METRICS_PREFIX}/year=\d{{4}}/"
+        r"week_end_date=\d{4}-\d{2}-\d{2}/$"
+    )
+    paginator = s3.get_paginator("list_objects_v2")
+    prefixes = []
+
+    for page in paginator.paginate(
+        Bucket=S3_BUCKET,
+        Prefix=f"{WEEKLY_MARKET_METRICS_PREFIX}/",
+        Delimiter="/",
+    ):
+        # Top-level common prefixes are year=...; drill into each below.
+        for year_item in page.get("CommonPrefixes", []):
+            year_prefix = year_item["Prefix"]
+            year_pages = paginator.paginate(
+                Bucket=S3_BUCKET,
+                Prefix=year_prefix,
+                Delimiter="/",
+            )
+            for year_page in year_pages:
+                for item in year_page.get("CommonPrefixes", []):
+                    prefix = item["Prefix"]
+                    if legacy_pattern.match(prefix):
+                        prefixes.append(prefix)
+
+    return sorted(set(prefixes))
+
+
+def cleanup_legacy_week_end_prefixes() -> None:
+    s3 = boto3.client("s3")
+    legacy_prefixes = list_legacy_week_end_prefixes(s3)
+
+    if not legacy_prefixes:
+        print(
+            "No legacy week_end_date prefixes found under "
+            f"s3://{S3_BUCKET}/{WEEKLY_MARKET_METRICS_PREFIX}/"
+        )
+        return
+
+    print("Legacy week_end_date prefixes to delete:")
+    for prefix in legacy_prefixes:
+        print(f"  s3://{S3_BUCKET}/{prefix}")
+
+    for prefix in legacy_prefixes:
+        delete_s3_prefix(s3, prefix)
+
+    remaining = list_legacy_week_end_prefixes(s3)
+    if remaining:
+        raise RuntimeError(
+            "Legacy week_end_date cleanup failed. Remaining prefixes:\n"
+            + "\n".join(f"s3://{S3_BUCKET}/{prefix}" for prefix in remaining)
+        )
+
+    print("Legacy week_end_date cleanup completed.")
 
 
 def legacy_week_end_prefixes_for_week(s3, week_start_date) -> list[str]:
@@ -245,7 +303,15 @@ def main() -> None:
         "--target-weeks",
         type=int,
         default=8,
-        help="Number of latest weekly rows to update.",
+        help="Number of latest weekly partitions to update when --start-week-date is not set.",
+    )
+    parser.add_argument(
+        "--start-week-date",
+        type=str,
+        help=(
+            "Rebuild every weekly partition from this date's calendar week onward. "
+            "Example: 2025-10-10 rebuilds from week_start_date=2025-10-06."
+        ),
     )
     parser.add_argument(
         "--warmup-calendar-days",
@@ -256,11 +322,32 @@ def main() -> None:
             "Needs to be long enough for 30 weekly observations."
         ),
     )
+    parser.add_argument(
+        "--cleanup-legacy-week-end",
+        action="store_true",
+        help=(
+            "Delete all old week_end_date=... weekly metric prefixes and exit. "
+            "The script logs every prefix before deletion."
+        ),
+    )
 
     args = parser.parse_args()
 
+    if args.cleanup_legacy_week_end:
+        cleanup_legacy_week_end_prefixes()
+        return
+
     print("Building incremental weekly market metrics from S3...")
-    print(f"Target weeks: {args.target_weeks}")
+    start_week_date = None
+    if args.start_week_date:
+        parsed_start = pd.to_datetime(args.start_week_date).date()
+        start_week_date = parsed_start - timedelta(days=parsed_start.weekday())
+        print(
+            f"Rebuilding weekly partitions from week_start_date={start_week_date} "
+            f"(requested {args.start_week_date})"
+        )
+    else:
+        print(f"Target weeks: {args.target_weeks}")
     print(f"Warm-up calendar days: {args.warmup_calendar_days}")
 
     keys = list_raw_objects()
@@ -287,6 +374,21 @@ def main() -> None:
 
     warmup_start_sql = warmup_start_date.strftime("%Y-%m-%d")
     latest_date_sql = latest_date.strftime("%Y-%m-%d")
+
+    if start_week_date:
+        target_weeks_sql = f"""
+        SELECT DISTINCT week_start_date
+        FROM with_previous
+        WHERE week_start_date >= DATE '{start_week_date}'
+        ORDER BY week_start_date DESC
+        """
+    else:
+        target_weeks_sql = f"""
+        SELECT DISTINCT week_start_date
+        FROM with_previous
+        ORDER BY week_start_date DESC
+        LIMIT {args.target_weeks}
+        """
 
     query = f"""
     WITH raw_input AS (
@@ -452,10 +554,7 @@ def main() -> None:
     ),
 
     target_weeks AS (
-        SELECT DISTINCT week_start_date
-        FROM with_previous
-        ORDER BY week_start_date DESC
-        LIMIT {args.target_weeks}
+        {target_weeks_sql}
     ),
 
     final AS (
