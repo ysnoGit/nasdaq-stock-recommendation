@@ -37,6 +37,13 @@ for package in packages:
         raise
     else:
         print(f"OK   {package}")
+
+try:
+    __import__("psycopg")
+except Exception as exc:
+    print(f"WARN psycopg: {exc}")
+else:
+    print("OK   psycopg")
 PY
 
 echo
@@ -79,3 +86,21 @@ fi
 echo
 echo "S3 bucket access:"
 aws s3 ls "s3://${S3_BUCKET}/" --region "$AWS_REGION"
+
+echo
+if [[ -n "${SUPABASE_DB_URL:-}" ]]; then
+  echo "SUPABASE_DB_URL: set"
+  echo "Supabase database check:"
+  python3 - <<'PY'
+import os
+
+import psycopg
+
+with psycopg.connect(os.environ["SUPABASE_DB_URL"]) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT current_database()")
+        print(f"current_database: {cur.fetchone()[0]}")
+PY
+else
+  echo "SUPABASE_DB_URL: not set (skipping optional Supabase database check)"
+fi

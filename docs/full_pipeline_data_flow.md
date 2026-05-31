@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This repository implements an EC2 and S3 backed NASDAQ stock screening data pipeline. It extracts raw Compustat data from WRDS, writes raw Parquet files to S3, builds processed feature tables with DuckDB, and produces final screening result files under a parameterized `results/` prefix.
+This repository implements an EC2 and S3 backed NASDAQ stock screening data pipeline. It extracts raw Compustat data from WRDS, writes raw Parquet files to S3, builds processed feature tables with DuckDB, and produces final screening result files under a parameterized `results/` prefix. An optional Supabase PostgreSQL serving layer can load selected processed features for indexed application queries without replacing S3 as the data lake.
 
 The current production-style entry point is:
 
@@ -36,6 +36,7 @@ The pipeline follows a simple lake-style layout:
 | Raw | WRDS extracts with minimal feature processing | `raw/` |
 | Processed | Reusable feature tables for fundamentals, daily market metrics, weekly market metrics, and recent volume | `processed/` |
 | Results | Parameterized final screening outputs | `results/` |
+| Serving | Optional relational tables for dashboards and apps | Supabase PostgreSQL |
 
 Central configuration lives in [`server_pipeline/config.py`](../server_pipeline/config.py). The default bucket is `nasdaq-stock-recommendation`; the default AWS region is `ap-northeast-2`, with overrides through `AWS_REGION` or `AWS_DEFAULT_REGION`.
 
@@ -85,6 +86,10 @@ flowchart TD
     PRV -. "related feature snapshot, not currently joined by final screening script" .-> SCR
 
     SCR --> RES["S3 final results<br/>results/screening_results/&lt;param_tag&gt;/screening_results.parquet<br/>results/screening_results/&lt;param_tag&gt;/screening_results.csv"]
+
+    PDM --> SUPA["Supabase serving tables<br/>security_feature_snapshot<br/>annual_growth_history<br/>quarterly_growth_history"]
+    PWM --> SUPA
+    PFH --> SUPA
 ```
 
 ## Data Layer Explanation
@@ -105,6 +110,18 @@ The processed layer stores reusable feature tables:
 ### `results/`
 
 The results layer stores parameterized screening outputs. A folder such as `n10_annual3_quarter4_q5_m3` identifies the screening thresholds used to produce that output.
+
+### Supabase Serving Layer
+
+Supabase is optional and is used only as a serving layer for app-facing relational queries. S3 remains the durable raw and processed data lake. The serving loader reads processed Parquet files and upserts:
+
+```text
+security_feature_snapshot
+annual_growth_history
+quarterly_growth_history
+```
+
+Setup and commands are documented in [`docs/supabase_serving_layer.md`](supabase_serving_layer.md).
 
 ## Step-By-Step Processing
 

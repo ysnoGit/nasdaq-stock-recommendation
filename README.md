@@ -34,6 +34,12 @@ Detailed data lineage, output paths, table grains, validation checks, and design
 docs/full_pipeline_data_flow.md
 ```
 
+Supabase PostgreSQL can be used as an application serving layer on top of the processed S3 Parquet outputs. The loader upserts security feature snapshots plus annual and quarterly growth history without storing credentials in the repository:
+
+```text
+docs/supabase_serving_layer.md
+```
+
 For EC2 setup and run commands, see:
 
 ```text
