@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="${REPO_DIR:-/home/ec2-user/projects/nasdaq-stock-recommendation}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_DIR="${REPO_DIR:-${DEFAULT_REPO_DIR}}"
 REGION="ap-northeast-2"
 INSTANCE_ID="i-07311259548e90438"
 ROLE_NAME="NasdaqRunBatchSSMSchedulerRole"
