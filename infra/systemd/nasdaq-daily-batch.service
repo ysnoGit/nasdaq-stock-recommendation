@@ -1,0 +1,14 @@
+[Unit]
+Description=NASDAQ Stock Recommendation Daily Batch
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/projects/nasdaq-stock-recommendation
+ExecStart=/home/ec2-user/projects/nasdaq-stock-recommendation/scripts/run_daily_batch_and_shutdown.sh
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=multi-user.target

@@ -42,3 +42,11 @@ For EC2 setup and run commands, see:
 ```text
 docs/ec2_full_pipeline_runbook.md
 ```
+
+## Daily EC2 Batch Automation
+
+The daily production flow can be automated with EventBridge Scheduler, systemd, the full S3 pipeline, the Supabase loader, and optional EC2 self-shutdown. Setup details are in:
+
+```text
+docs/daily_ec2_batch_automation.md
+```
