@@ -163,8 +163,8 @@ def main():
     if processed_latest_date != wrds_latest_date:
         print("Then rebuild processed layers:")
         print("python3 scripts/build_daily_market_metrics.py")
-        print("python3 scripts/build_recent_daily_volume_metrics.py")
         print("python3 scripts/build_weekly_market_metrics.py")
+        print("Then reload Supabase serving tables for dynamic Condition D.")
 
 
 if __name__ == "__main__":

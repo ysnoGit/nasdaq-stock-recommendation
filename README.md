@@ -7,7 +7,7 @@ This project builds an AWS EC2 and S3 backed NASDAQ stock feature pipeline using
 The current pipeline follows a `raw -> processed` data layout in S3, with optional serving tables in Supabase:
 
 - `raw/`: WRDS Compustat annual, quarterly, and daily security extracts.
-- `processed/`: reusable feature tables for fundamental growth, daily market metrics, weekly market metrics, and recent daily volume metrics.
+- `processed/`: reusable feature tables for fundamental growth, daily market metrics, and weekly market metrics.
 - Supabase serving layer: application-facing feature tables loaded from processed S3 outputs.
 
 Main EC2/S3 runner:
@@ -23,7 +23,8 @@ Main pipeline scripts:
 - `server_pipeline/fundamentals/build_fundamental_growth_history_s3.py`
 - `server_pipeline/daily/build_daily_market_metrics_s3.py`
 - `server_pipeline/daily/build_weekly_market_metrics_s3.py`
-- `server_pipeline/daily/build_recent_daily_volume_metrics_s3.py`
+
+Condition D is calculated dynamically from three months of `security_feature_snapshot.volume_ratio` history in Supabase, not from a precomputed `recent_daily_volume_metrics` S3 snapshot.
 
 Detailed data lineage, output paths, table grains, validation checks, and design notes are documented in:
 

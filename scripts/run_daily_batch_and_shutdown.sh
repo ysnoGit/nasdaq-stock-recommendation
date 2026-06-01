@@ -139,6 +139,41 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"]) as conn:
         for table in tables:
             cur.execute(f"SELECT COUNT(*) FROM {table}")
             print(f"{table}: {cur.fetchone()[0]:,} rows")
+
+        cur.execute("""
+            SELECT
+                MIN(snapshot_date) AS min_snapshot_date,
+                MAX(snapshot_date) AS max_snapshot_date,
+                COUNT(*) AS row_count,
+                COUNT(*) FILTER (WHERE volume_ratio IS NOT NULL) AS volume_ratio_rows,
+                COUNT(*) FILTER (WHERE weekly_close_price IS NOT NULL) AS weekly_matched_rows
+            FROM security_feature_snapshot
+        """)
+        min_date, max_date, row_count, volume_rows, weekly_rows = cur.fetchone()
+        print(
+            "security_feature_snapshot coverage: "
+            f"{min_date} to {max_date}; rows={row_count:,}; "
+            f"volume_ratio_rows={volume_rows:,}; weekly_matched_rows={weekly_rows:,}"
+        )
+
+        cur.execute("""
+            SELECT
+                COUNT(DISTINCT snapshot_date) AS distinct_snapshot_dates,
+                MAX(snapshot_date) - MIN(snapshot_date) AS covered_days
+            FROM security_feature_snapshot
+            WHERE snapshot_date >= (
+                (SELECT MAX(snapshot_date) FROM security_feature_snapshot)
+                - INTERVAL '3 months'
+            )
+        """)
+        distinct_dates, covered_days = cur.fetchone()
+        print(
+            "dynamic Condition D lookback coverage: "
+            f"{distinct_dates:,} snapshot dates across {covered_days} days"
+        )
+
+        if distinct_dates == 0:
+            raise RuntimeError("security_feature_snapshot has no rows for dynamic Condition D.")
 PY
 
 echo

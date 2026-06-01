@@ -1,3 +1,10 @@
+"""Deprecated local recent-volume snapshot utility.
+
+The active EC2/S3 pipeline no longer uses recent_daily_volume_metrics.
+Condition D is calculated dynamically from Supabase
+security_feature_snapshot.volume_ratio history.
+"""
+
 from pathlib import Path
 from datetime import datetime, timezone
 import os

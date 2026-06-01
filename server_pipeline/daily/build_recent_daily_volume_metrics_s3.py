@@ -1,3 +1,11 @@
+"""Deprecated recent-volume snapshot builder.
+
+This script is kept for historical/manual inspection only. It is no longer
+called by the active EC2 pipeline. In the Supabase serving-layer design,
+Condition D is calculated dynamically from three months of
+security_feature_snapshot.volume_ratio history.
+"""
+
 import argparse
 import re
 from datetime import datetime, timezone

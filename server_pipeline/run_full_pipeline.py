@@ -48,11 +48,6 @@ PIPELINE_STEPS = [
         group="transform",
         script=Path("server_pipeline/daily/build_weekly_market_metrics_s3.py"),
     ),
-    PipelineStep(
-        name="Build recent daily volume metrics",
-        group="transform",
-        script=Path("server_pipeline/daily/build_recent_daily_volume_metrics_s3.py"),
-    ),
 ]
 
 

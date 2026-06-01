@@ -35,6 +35,8 @@ s3://nasdaq-stock-recommendation/processed/annual_fundamental_growth_history/ann
 s3://nasdaq-stock-recommendation/processed/quarterly_fundamental_growth_history/quarterly_fundamental_growth_history.parquet
 ```
 
+The loader does not read `processed/recent_daily_volume_metrics/`. That snapshot belongs to the older S3-only screening design and is no longer part of the active serving flow.
+
 `security_feature_snapshot` loads the latest rolling window from daily market metrics. The default is three months:
 
 ```bash
@@ -106,6 +108,10 @@ select count(*) from security_feature_snapshot;
 select min(snapshot_date), max(snapshot_date), count(*) from security_feature_snapshot;
 select count(*) from annual_growth_history;
 select count(*) from quarterly_growth_history;
+select min(snapshot_date), max(snapshot_date), count(distinct snapshot_date)
+from security_feature_snapshot;
+select count(*) from security_feature_snapshot
+where volume_ratio is not null;
 
 select snapshot_date, gvkey, iid, count(*)
 from security_feature_snapshot
@@ -133,6 +139,25 @@ Conditions should be evaluated dynamically by the app or screening layer from th
 | H | `security_feature_snapshot.weekly_h_confirmation_pass`, mapped from processed weekly `flag_h`. |
 
 Do not store a fixed `recent_volume_signal_count` in Supabase. Condition D should stay dynamic and should be calculated from daily `volume_ratio` history using configurable screening parameters. This keeps the serving layer reusable when `q` or `m` changes.
+
+Example Condition D query:
+
+```sql
+WITH recent_volume AS (
+    SELECT
+        gvkey,
+        iid,
+        COUNT(*) FILTER (WHERE volume_ratio >= :q) AS recent_c_count
+    FROM security_feature_snapshot
+    WHERE snapshot_date BETWEEN (:selected_date::date - INTERVAL '3 months')
+                            AND :selected_date::date
+    GROUP BY gvkey, iid
+)
+SELECT recent_c_count >= :m AS flag_d
+FROM recent_volume;
+```
+
+Because this query looks back three months, the serving load must retain at least the latest three months of `security_feature_snapshot` rows.
 
 The current processed daily and weekly feature files do not carry upstream universe-audit fields. For now, the serving loader sets:
 

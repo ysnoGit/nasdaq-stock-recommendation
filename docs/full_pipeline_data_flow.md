@@ -33,7 +33,7 @@ The pipeline follows a simple lake-style layout:
 | Layer | Purpose | S3 prefix |
 |---|---|---|
 | Raw | WRDS extracts with minimal feature processing | `raw/` |
-| Processed | Reusable feature tables for fundamentals, daily market metrics, weekly market metrics, and recent volume | `processed/` |
+| Processed | Reusable feature tables for fundamentals, daily market metrics, and weekly market metrics | `processed/` |
 | Serving | Optional relational tables for dashboards and apps | Supabase PostgreSQL |
 
 Central configuration lives in [`server_pipeline/config.py`](../server_pipeline/config.py). The default bucket is `nasdaq-stock-recommendation`; the default AWS region is `ap-northeast-2`, with overrides through `AWS_REGION` or `AWS_DEFAULT_REGION`.
@@ -53,7 +53,6 @@ This is the actual order defined in [`server_pipeline/run_full_pipeline.py`](../
 | 3 | `server_pipeline/fundamentals/build_fundamental_growth_history_s3.py` | Transformation | Raw annual and quarterly `latest` fundamentals | `processed/annual_fundamental_growth_history/annual_fundamental_growth_history.parquet`; `processed/quarterly_fundamental_growth_history/quarterly_fundamental_growth_history.parquet` | Parquet | Annual: `gvkey, fyear`; quarterly: `gvkey, fyearq, fqtr` | No, single feature history files | Row counts, unique GVKEYs, ranges, valid growth-pair counts, duplicate key counts |
 | 4 | `server_pipeline/daily/build_daily_market_metrics_s3.py` | Feature engineering | Raw daily security files, including yearly warm-up files and date-partitioned daily raw files | `processed/daily_market_metrics/year=YYYY/month=MM/date=YYYY-MM-DD/daily_market_metrics_YYYY-MM-DD.parquet` | Parquet | `gvkey, iid, date` | Yes, by year/month/date | Selected raw files, target dates, row counts, unique tickers, date range, duplicate `gvkey/iid/date`, flag counts |
 | 5 | `server_pipeline/daily/build_weekly_market_metrics_s3.py` | Feature engineering | Raw daily security files | `processed/weekly_market_metrics/year=YYYY/week_start_date=YYYY-MM-DD/weekly_market_metrics_YYYY-MM-DD.parquet` | Parquet | `gvkey, iid, week_start_date` | Yes, by year/week_start_date | Duplicate ticker-week, duplicate security-week, one week end per week start, ticker coverage warning, legacy `week_end_date` cleanup logging |
-| 6 | `server_pipeline/daily/build_recent_daily_volume_metrics_s3.py` | Feature engineering | Date-partitioned daily market metrics | `processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet` | Parquet | `gvkey, iid, date` inside recent window | No, intentionally one snapshot file | Daily partition count, output rows, unique tickers, date range, latest date |
 
 ## Data Lineage Diagram
 
@@ -74,12 +73,10 @@ flowchart TD
     DMM --> PDM["S3 processed daily market metrics<br/>processed/daily_market_metrics/year=/month=/date=/"]
     WMM --> PWM["S3 processed weekly market metrics<br/>processed/weekly_market_metrics/year=/week_start_date=/"]
 
-    PDM --> RDV["build_recent_daily_volume_metrics_s3.py"]
-    RDV --> PRV["S3 recent volume snapshot<br/>processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet"]
-
     PDM --> SUPA["Supabase serving tables<br/>security_feature_snapshot<br/>annual_growth_history<br/>quarterly_growth_history"]
     PWM --> SUPA
     PFH --> SUPA
+    SUPA --> DYN["Dynamic Condition D query<br/>3 months of volume_ratio history"]
 ```
 
 ## Data Layer Explanation
@@ -95,7 +92,7 @@ The processed layer stores reusable feature tables:
 - Fundamental growth history from annual and quarterly fundamentals.
 - Daily market indicators and daily helper flags.
 - Weekly market indicators and weekly helper flags.
-- Recent daily volume snapshot used as a compact feature layer.
+- Daily `volume_ratio` history used by the Supabase serving layer for dynamic Condition D checks.
 
 ### Supabase Serving Layer
 
@@ -203,17 +200,34 @@ The script can also clean old legacy `week_end_date=...` prefixes:
 python3 server_pipeline/daily/build_weekly_market_metrics_s3.py --cleanup-legacy-week-end
 ```
 
-### E. Recent Daily Volume Metrics
+### E. Dynamic Volume History
 
-`server_pipeline/daily/build_recent_daily_volume_metrics_s3.py` scans the date-partitioned daily market metrics and creates a recent-volume feature snapshot over the latest configurable lookback window. The default is three months.
+`recent_daily_volume_metrics` was part of the older S3-only screening design. It is no longer part of the active pipeline and is not required by the Supabase serving-layer design.
 
-This step intentionally writes one single feature snapshot file:
+The deprecated script remains in the repository for historical/manual inspection only:
 
 ```text
-processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet
+server_pipeline/daily/build_recent_daily_volume_metrics_s3.py
 ```
 
-It is different from `daily_market_metrics` and `weekly_market_metrics`. Those are time-series feature tables partitioned by date/week. `recent_daily_volume_metrics` is a compact feature layer for recent volume analysis and screening support; it stores recent rows with `latest_date` and `window_start_date` columns so consumers can see the snapshot window.
+Historical S3 files under `processed/recent_daily_volume_metrics/` may remain as old artifacts, but active runners and serving loaders no longer read or write them.
+
+Condition D now uses daily `volume_ratio` history loaded into `security_feature_snapshot`. The serving loader must retain at least three months of `security_feature_snapshot` rows so the app can calculate:
+
+```sql
+WITH recent_volume AS (
+    SELECT
+        gvkey,
+        iid,
+        COUNT(*) FILTER (WHERE volume_ratio >= :q) AS recent_c_count
+    FROM security_feature_snapshot
+    WHERE snapshot_date BETWEEN (:selected_date::date - INTERVAL '3 months')
+                            AND :selected_date::date
+    GROUP BY gvkey, iid
+)
+SELECT recent_c_count >= :m AS flag_d
+FROM recent_volume;
+```
 
 ### F. Dynamic Signal Evaluation
 
@@ -248,7 +262,6 @@ Because Condition D depends on configurable `q` and `m` values, it should be cal
 | Quarterly growth history | `gvkey, fyearq, fqtr` |
 | Daily market metrics | `gvkey, iid, date` |
 | Weekly market metrics | `gvkey, iid, week_start_date` |
-| Recent daily volume metrics | `gvkey, iid, date` within latest snapshot window |
 
 ## S3 Output Table
 
@@ -261,7 +274,6 @@ Because Condition D depends on configurable `q` and `m` values, it should be cal
 | Quarterly growth history | `processed/quarterly_fundamental_growth_history/quarterly_fundamental_growth_history.parquet` | Single file |
 | Daily market metrics | `processed/daily_market_metrics/year=YYYY/month=MM/date=YYYY-MM-DD/daily_market_metrics_YYYY-MM-DD.parquet` | Year/month/date |
 | Weekly market metrics | `processed/weekly_market_metrics/year=YYYY/week_start_date=YYYY-MM-DD/weekly_market_metrics_YYYY-MM-DD.parquet` | Year/week_start_date |
-| Recent daily volume metrics | `processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet` | Single snapshot file |
 
 ## Validation Checks Table
 
@@ -272,12 +284,11 @@ Because Condition D depends on configurable `q` and `m` values, it should be cal
 | Fundamental growth history | Row counts, unique GVKEYs, ranges, valid growth-pair counts, duplicate annual/quarterly keys |
 | Daily market metrics | Selected files, target dates, output rows, unique tickers, date range, duplicate `gvkey/iid/date`, helper flag counts |
 | Weekly market metrics | Selected files, row counts, unique tickers, week ranges, duplicate ticker-week, duplicate `gvkey/iid/week_start_date`, one week end per week start, ticker coverage warning, old prefix cleanup logging |
-| Recent daily volume metrics | Number of input daily partitions, output rows, unique tickers, date range, latest date |
 
 ## Known Design Choices
 
 - `weekly_market_metrics` is partitioned by `week_start_date` because it is a time-series feature table and the partition must remain stable while the current week updates.
-- `recent_daily_volume_metrics` is intentionally kept as a single feature snapshot file because it represents the current recent-volume feature layer for downstream inspection and screening support.
+- `recent_daily_volume_metrics` is deprecated and removed from active runners. Condition D is calculated dynamically from `security_feature_snapshot.volume_ratio` history.
 - The full runner stops after processed feature creation; application-facing queries should use Supabase serving tables loaded from those processed features.
 - `server_pipeline/` is the current EC2/S3-backed implementation. Some files under `scripts/` are older local utilities or one-off checks and are not part of the current full runner.
 
@@ -285,7 +296,7 @@ Because Condition D depends on configurable `q` and `m` values, it should be cal
 
 - The extraction steps require WRDS network access, `WRDS_USERNAME`, and a correctly permissioned `~/.pgpass`.
 - Daily and weekly market metrics are incremental by default. Larger historical rebuilds require explicit arguments, such as `--start-week-date` for weekly metrics.
-- `recent_daily_volume_metrics` is produced as a snapshot file, not a partitioned historical feature table.
+- Historical S3 files under `processed/recent_daily_volume_metrics/` may remain, but they are old artifacts and are not read by the active pipeline.
 - Universe-audit fields are not yet promoted into the processed serving inputs; the Supabase loader currently sets `is_excluded_universe = false` and `exclusion_reason = null`.
 
 ## Next Improvement Ideas

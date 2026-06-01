@@ -175,8 +175,9 @@ s3://nasdaq-stock-recommendation/processed/annual_fundamental_growth_history/ann
 s3://nasdaq-stock-recommendation/processed/quarterly_fundamental_growth_history/quarterly_fundamental_growth_history.parquet
 s3://nasdaq-stock-recommendation/processed/daily_market_metrics/
 s3://nasdaq-stock-recommendation/processed/weekly_market_metrics/
-s3://nasdaq-stock-recommendation/processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet
 ```
+
+`processed/recent_daily_volume_metrics/` is deprecated. Historical files may remain in S3, but the active pipeline no longer creates or reads them. Condition D is calculated dynamically from three months of `security_feature_snapshot.volume_ratio` history after the Supabase load.
 
 ## Troubleshooting
 
