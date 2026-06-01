@@ -14,10 +14,17 @@ fi
 echo "Installing ${SERVICE_NAME}..."
 sudo cp "${SOURCE_SERVICE}" "${TARGET_SERVICE}"
 sudo systemctl daemon-reload
-sudo systemctl enable "${SERVICE_NAME}"
+sudo systemctl disable "${SERVICE_NAME}" || true
 
 echo
-echo "Installed and enabled ${SERVICE_NAME}."
+echo "Installed ${SERVICE_NAME}."
+echo "This service is installed but not enabled on boot."
+echo "Current enablement state:"
+state="$(systemctl is-enabled "${SERVICE_NAME}" 2>/dev/null || true)"
+echo "${state:-unknown}"
+if [[ "${state}" == "static" || "${state}" == "disabled" ]]; then
+  echo "${SERVICE_NAME} will not start automatically on boot."
+fi
 echo
 echo "Test manually with:"
 echo "  sudo systemctl start ${SERVICE_NAME}"

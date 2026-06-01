@@ -5,12 +5,33 @@
 ```text
 EventBridge Scheduler
   -> starts EC2 instance
-  -> systemd runs nasdaq-daily-batch.service on boot
-  -> scripts/run_daily_batch_and_shutdown.sh runs the pipeline
+  -> separate EventBridge Scheduler sends SSM Run Command
+  -> SSM explicitly starts scripts/run_daily_batch_and_shutdown.sh
   -> EC2 stops itself when AUTO_STOP_EC2=true
 ```
 
 This keeps the instance off except during the daily batch window. The batch refreshes WRDS/S3 processed features, loads the Supabase serving tables, validates outputs, and then stops the instance after completion.
+
+Older design:
+
+```text
+EventBridge starts EC2 -> systemd runs pipeline automatically on boot
+```
+
+Problem: manual EC2 starts also triggered the full pipeline.
+
+Current design:
+
+```text
+EventBridge start schedule at 20:00 KST Tue-Sat
+  -> starts EC2
+EventBridge SSM schedule at 20:05 KST Tue-Sat
+  -> sends AWS-RunShellScript to the instance
+  -> batch script runs as ec2-user
+  -> batch stops EC2 after completion if AUTO_STOP_EC2=true
+```
+
+Manual EC2 starts no longer run the pipeline automatically.
 
 The active batch does not build `processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet`. That file was part of the older S3-only screening design. Condition D is now calculated dynamically from at least three months of `security_feature_snapshot.volume_ratio` history in Supabase.
 
@@ -116,6 +137,33 @@ The start policy allows the scheduler role to start only:
 i-07311259548e90438
 ```
 
+The SSM Run Command schedule uses:
+
+```text
+infra/iam/eventbridge-ssm-send-command-policy.json
+infra/iam/eventbridge-scheduler-trust-policy.json
+```
+
+The EC2 role `NasdaqStockRecommendationEC2Role` must be an SSM managed-instance role. Prefer attaching:
+
+```text
+AmazonSSMManagedInstanceCore
+```
+
+Attach it with:
+
+```bash
+aws iam attach-role-policy \
+  --role-name NasdaqStockRecommendationEC2Role \
+  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+```
+
+See:
+
+```text
+infra/iam/ec2-ssm-managed-instance-note.md
+```
+
 ## Install The Systemd Service
 
 On EC2:
@@ -124,6 +172,8 @@ On EC2:
 cd /home/ec2-user/projects/nasdaq-stock-recommendation
 bash scripts/install_daily_batch_systemd_service.sh
 ```
+
+This installs the service but does not enable boot auto-run.
 
 The service template is:
 
@@ -150,11 +200,12 @@ ls -lh logs/
 tail -100 logs/daily_batch_*.log
 ```
 
-Disable the service:
+Disable existing boot auto-run:
 
 ```bash
+bash scripts/disable_daily_batch_boot_start.sh
 sudo systemctl disable nasdaq-daily-batch.service
-sudo systemctl daemon-reload
+systemctl is-enabled nasdaq-daily-batch.service
 ```
 
 ## Test Without Shutdown
@@ -172,9 +223,9 @@ This exports `AUTO_STOP_EC2=false` for the current process only. It does not mod
 /home/ec2-user/.nasdaq_pipeline.env
 ```
 
-## Create The EventBridge Schedule
+## Create The EventBridge Start Schedule
 
-Create or update the weekday 08:00 Asia/Seoul schedule:
+Create or update the EC2 start schedule:
 
 ```bash
 cd /home/ec2-user/projects/nasdaq-stock-recommendation
@@ -194,11 +245,11 @@ aws iam get-role \
 
 It must include `scheduler.amazonaws.com` as the trusted service principal.
 
-The schedule is:
+The start schedule is:
 
 ```text
 start-nasdaq-batch-ec2-weekdays
-cron(0 8 ? * MON-FRI *)
+cron(0 20 ? * TUE-SAT *)
 Asia/Seoul
 ```
 
@@ -207,6 +258,59 @@ Verify it:
 ```bash
 aws scheduler get-schedule \
   --name start-nasdaq-batch-ec2-weekdays \
+  --region ap-northeast-2
+```
+
+## Test Through SSM
+
+First confirm the instance is running and registered with SSM:
+
+```bash
+aws ssm describe-instance-information --region ap-northeast-2
+```
+
+Send a manual SSM command:
+
+```bash
+cd /home/ec2-user/projects/nasdaq-stock-recommendation
+bash scripts/test_run_batch_via_ssm.sh
+```
+
+The script prints a command ID. Check status with:
+
+```bash
+aws ssm list-command-invocations \
+  --command-id COMMAND_ID_FROM_SCRIPT \
+  --details \
+  --region ap-northeast-2
+```
+
+## Create The EventBridge SSM Batch Schedule
+
+Create or update the batch-trigger schedule:
+
+```bash
+cd /home/ec2-user/projects/nasdaq-stock-recommendation
+bash scripts/create_eventbridge_run_batch_ssm_schedule.sh
+```
+
+The SSM schedule is:
+
+```text
+run-nasdaq-daily-batch-ssm-weekdays
+cron(5 20 ? * TUE-SAT *)
+Asia/Seoul
+```
+
+Verify both schedules:
+
+```bash
+aws scheduler get-schedule \
+  --name start-nasdaq-batch-ec2-weekdays \
+  --region ap-northeast-2
+
+aws scheduler get-schedule \
+  --name run-nasdaq-daily-batch-ssm-weekdays \
   --region ap-northeast-2
 ```
 
@@ -233,6 +337,12 @@ Run the batch manually with normal shutdown behavior:
 ```bash
 cd /home/ec2-user/projects/nasdaq-stock-recommendation
 bash scripts/run_daily_batch_and_shutdown.sh
+```
+
+Run the manual systemd service:
+
+```bash
+sudo systemctl start nasdaq-daily-batch.service
 ```
 
 ## Troubleshooting
@@ -306,4 +416,27 @@ aws iam get-role --role-name NasdaqStartEC2SchedulerRole
 aws iam get-role-policy \
   --role-name NasdaqStartEC2SchedulerRole \
   --policy-name StartNasdaqBatchEC2Policy
+```
+
+### SSM Did Not Run The Batch
+
+Confirm the instance is managed by SSM:
+
+```bash
+aws ssm describe-instance-information --region ap-northeast-2
+```
+
+Confirm the EC2 role has `AmazonSSMManagedInstanceCore` attached. Then test direct SSM execution:
+
+```bash
+bash scripts/test_run_batch_via_ssm.sh
+```
+
+Check command status:
+
+```bash
+aws ssm list-command-invocations \
+  --command-id COMMAND_ID_FROM_SCRIPT \
+  --details \
+  --region ap-northeast-2
 ```

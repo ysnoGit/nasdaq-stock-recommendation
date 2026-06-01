@@ -4,23 +4,23 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-/home/ec2-user/projects/nasdaq-stock-recommendation}"
 REGION="ap-northeast-2"
 INSTANCE_ID="i-07311259548e90438"
-ROLE_NAME="NasdaqStartEC2SchedulerRole"
-POLICY_NAME="StartNasdaqBatchEC2Policy"
-SCHEDULE_NAME="start-nasdaq-batch-ec2-weekdays"
-SCHEDULE_EXPRESSION="cron(0 20 ? * TUE-SAT *)"
+ROLE_NAME="NasdaqRunBatchSSMSchedulerRole"
+POLICY_NAME="RunNasdaqBatchSSMPolicy"
+SCHEDULE_NAME="run-nasdaq-daily-batch-ssm-weekdays"
+SCHEDULE_EXPRESSION="cron(5 20 ? * TUE-SAT *)"
 SCHEDULE_TIMEZONE="Asia/Seoul"
 TRUST_POLICY="${REPO_DIR}/infra/iam/eventbridge-scheduler-trust-policy.json"
-START_POLICY="${REPO_DIR}/infra/iam/eventbridge-start-ec2-policy.json"
-TARGET_ARN="arn:aws:scheduler:::aws-sdk:ec2:startInstances"
+SSM_POLICY="${REPO_DIR}/infra/iam/eventbridge-ssm-send-command-policy.json"
+TARGET_ARN="arn:aws:scheduler:::aws-sdk:ssm:sendCommand"
+BATCH_COMMAND="runuser -l ec2-user -c 'cd /home/ec2-user/projects/nasdaq-stock-recommendation && bash scripts/run_daily_batch_and_shutdown.sh'"
 
 print_permission_help() {
   cat >&2 <<EOF
 
-ERROR: EventBridge Scheduler setup needs one-time IAM/Scheduler permissions.
+ERROR: SSM batch schedule setup needs one-time IAM/Scheduler permissions.
 
 Run this script from AWS CloudShell or an AWS CLI profile that can manage IAM
-roles and EventBridge Scheduler resources. The EC2 batch role usually should
-not have broad IAM role-creation permissions.
+roles and EventBridge Scheduler resources.
 
 Required one-time permissions include:
   iam:GetRole
@@ -32,8 +32,8 @@ Required one-time permissions include:
   scheduler:CreateSchedule
   scheduler:UpdateSchedule
 
-After the schedule is created, the daily batch only needs the EC2 role's normal
-pipeline permissions plus ec2:StopInstances for its own instance.
+The EC2 instance role must also have AmazonSSMManagedInstanceCore attached so
+the instance can receive SSM Run Command requests.
 EOF
 }
 
@@ -59,19 +59,6 @@ run_schedule_command() {
   done
 
   print_permission_help
-  cat >&2 <<EOF
-
-If the error says "The execution role you provide must allow AWS EventBridge
-Scheduler to assume the role", verify this trust policy on ${ROLE_NAME}:
-
-aws iam get-role \\
-  --role-name ${ROLE_NAME} \\
-  --query 'Role.AssumeRolePolicyDocument' \\
-  --output json
-
-It must include:
-  "Principal": { "Service": "scheduler.amazonaws.com" }
-EOF
   exit 1
 }
 
@@ -80,8 +67,8 @@ if [[ ! -f "${TRUST_POLICY}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${START_POLICY}" ]]; then
-  echo "Start policy not found: ${START_POLICY}" >&2
+if [[ ! -f "${SSM_POLICY}" ]]; then
+  echo "SSM policy not found: ${SSM_POLICY}" >&2
   exit 1
 fi
 
@@ -99,7 +86,7 @@ fi
 run_or_explain_permissions aws iam put-role-policy \
   --role-name "${ROLE_NAME}" \
   --policy-name "${POLICY_NAME}" \
-  --policy-document "file://${START_POLICY}"
+  --policy-document "file://${SSM_POLICY}"
 
 ROLE_ARN="$(aws iam get-role --role-name "${ROLE_NAME}" --query 'Role.Arn' --output text)" || {
   print_permission_help
@@ -110,7 +97,32 @@ echo "Scheduler role ARN: ${ROLE_ARN}"
 echo "Waiting for IAM role/trust-policy propagation..."
 sleep 20
 
-TARGET_JSON="$(printf '{"Arn":"%s","RoleArn":"%s","Input":"{\\"InstanceIds\\":[\\"%s\\"]}"}' "${TARGET_ARN}" "${ROLE_ARN}" "${INSTANCE_ID}")"
+TARGET_FILE="$(mktemp)"
+python3 - "${TARGET_FILE}" "${TARGET_ARN}" "${ROLE_ARN}" "${INSTANCE_ID}" "${BATCH_COMMAND}" <<'PY'
+import json
+import sys
+
+target_file, target_arn, role_arn, instance_id, batch_command = sys.argv[1:]
+input_payload = {
+    "DocumentName": "AWS-RunShellScript",
+    "InstanceIds": [instance_id],
+    "Parameters": {
+        "commands": [batch_command],
+    },
+}
+target = {
+    "Arn": target_arn,
+    "RoleArn": role_arn,
+    "Input": json.dumps(input_payload),
+}
+with open(target_file, "w", encoding="utf-8") as handle:
+    json.dump(target, handle)
+PY
+
+cleanup() {
+  rm -f "${TARGET_FILE}"
+}
+trap cleanup EXIT
 
 echo "Creating or updating schedule ${SCHEDULE_NAME}..."
 if aws scheduler get-schedule --name "${SCHEDULE_NAME}" --region "${REGION}" >/dev/null 2>&1; then
@@ -120,7 +132,7 @@ if aws scheduler get-schedule --name "${SCHEDULE_NAME}" --region "${REGION}" >/d
     --schedule-expression "${SCHEDULE_EXPRESSION}" \
     --schedule-expression-timezone "${SCHEDULE_TIMEZONE}" \
     --flexible-time-window '{"Mode":"OFF"}' \
-    --target "${TARGET_JSON}"
+    --target "file://${TARGET_FILE}"
 else
   run_schedule_command aws scheduler create-schedule \
     --name "${SCHEDULE_NAME}" \
@@ -128,11 +140,11 @@ else
     --schedule-expression "${SCHEDULE_EXPRESSION}" \
     --schedule-expression-timezone "${SCHEDULE_TIMEZONE}" \
     --flexible-time-window '{"Mode":"OFF"}' \
-    --target "${TARGET_JSON}"
+    --target "file://${TARGET_FILE}"
 fi
 
 echo
-echo "EventBridge Scheduler setup complete."
+echo "EventBridge SSM batch schedule setup complete."
 echo "Schedule: ${SCHEDULE_NAME}"
 echo "Cron: ${SCHEDULE_EXPRESSION}"
 echo "Timezone: ${SCHEDULE_TIMEZONE}"
