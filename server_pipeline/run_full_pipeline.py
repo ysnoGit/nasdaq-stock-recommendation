@@ -53,11 +53,6 @@ PIPELINE_STEPS = [
         group="transform",
         script=Path("server_pipeline/daily/build_recent_daily_volume_metrics_s3.py"),
     ),
-    PipelineStep(
-        name="Build final screening results",
-        group="screening",
-        script=Path("server_pipeline/screening/build_final_screening_results_s3.py"),
-    ),
 ]
 
 
@@ -72,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--only",
-        choices=["extraction", "transform", "screening"],
+        choices=["extraction", "transform"],
         help="Run only one pipeline group.",
     )
     return parser.parse_args()

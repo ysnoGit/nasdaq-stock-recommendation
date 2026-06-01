@@ -119,14 +119,12 @@ Useful runner options:
 python3 server_pipeline/run_full_pipeline.py --skip-wrds
 python3 server_pipeline/run_full_pipeline.py --only extraction
 python3 server_pipeline/run_full_pipeline.py --only transform
-python3 server_pipeline/run_full_pipeline.py --only screening
 ```
 
-The runner writes final screening results to:
+The full pipeline now stops after processed feature creation. It no longer writes final screening result files by default. Load the processed features into Supabase after the full pipeline succeeds:
 
-```text
-s3://nasdaq-stock-recommendation/results/screening_results/<param_tag>/screening_results.parquet
-s3://nasdaq-stock-recommendation/results/screening_results/<param_tag>/screening_results.csv
+```bash
+bash scripts/load_processed_features_to_supabase.sh --apply-schema
 ```
 
 Weekly market metrics use `week_start_date` as the stable S3 partition key:
@@ -164,11 +162,14 @@ s3://nasdaq-stock-recommendation/raw/compustat_annual/latest/compustat_annual.pa
 s3://nasdaq-stock-recommendation/raw/compustat_quarterly/latest/compustat_quarterly.parquet
 ```
 
-Known final screening outputs:
+Known processed feature outputs:
 
 ```text
-s3://nasdaq-stock-recommendation/results/screening_results/n10_annual3_quarter4_q5_m3/screening_results.parquet
-s3://nasdaq-stock-recommendation/results/screening_results/n10_annual3_quarter4_q5_m3/screening_results.csv
+s3://nasdaq-stock-recommendation/processed/annual_fundamental_growth_history/annual_fundamental_growth_history.parquet
+s3://nasdaq-stock-recommendation/processed/quarterly_fundamental_growth_history/quarterly_fundamental_growth_history.parquet
+s3://nasdaq-stock-recommendation/processed/daily_market_metrics/
+s3://nasdaq-stock-recommendation/processed/weekly_market_metrics/
+s3://nasdaq-stock-recommendation/processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet
 ```
 
 ## Troubleshooting

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This repository implements an EC2 and S3 backed NASDAQ stock screening data pipeline. It extracts raw Compustat data from WRDS, writes raw Parquet files to S3, builds processed feature tables with DuckDB, and produces final screening result files under a parameterized `results/` prefix. An optional Supabase PostgreSQL serving layer can load selected processed features for indexed application queries without replacing S3 as the data lake.
+This repository implements an EC2 and S3 backed NASDAQ stock feature pipeline. It extracts raw Compustat data from WRDS, writes raw Parquet files to S3, and builds processed feature tables with DuckDB. An optional Supabase PostgreSQL serving layer can load selected processed features for indexed application queries without replacing S3 as the data lake.
 
 The current production-style entry point is:
 
@@ -22,7 +22,6 @@ The runner supports:
 python3 server_pipeline/run_full_pipeline.py --skip-wrds
 python3 server_pipeline/run_full_pipeline.py --only extraction
 python3 server_pipeline/run_full_pipeline.py --only transform
-python3 server_pipeline/run_full_pipeline.py --only screening
 ```
 
 `--skip-wrds` is useful after raw WRDS data already exists in S3.
@@ -35,7 +34,6 @@ The pipeline follows a simple lake-style layout:
 |---|---|---|
 | Raw | WRDS extracts with minimal feature processing | `raw/` |
 | Processed | Reusable feature tables for fundamentals, daily market metrics, weekly market metrics, and recent volume | `processed/` |
-| Results | Parameterized final screening outputs | `results/` |
 | Serving | Optional relational tables for dashboards and apps | Supabase PostgreSQL |
 
 Central configuration lives in [`server_pipeline/config.py`](../server_pipeline/config.py). The default bucket is `nasdaq-stock-recommendation`; the default AWS region is `ap-northeast-2`, with overrides through `AWS_REGION` or `AWS_DEFAULT_REGION`.
@@ -56,7 +54,6 @@ This is the actual order defined in [`server_pipeline/run_full_pipeline.py`](../
 | 4 | `server_pipeline/daily/build_daily_market_metrics_s3.py` | Feature engineering | Raw daily security files, including yearly warm-up files and date-partitioned daily raw files | `processed/daily_market_metrics/year=YYYY/month=MM/date=YYYY-MM-DD/daily_market_metrics_YYYY-MM-DD.parquet` | Parquet | `gvkey, iid, date` | Yes, by year/month/date | Selected raw files, target dates, row counts, unique tickers, date range, duplicate `gvkey/iid/date`, flag counts |
 | 5 | `server_pipeline/daily/build_weekly_market_metrics_s3.py` | Feature engineering | Raw daily security files | `processed/weekly_market_metrics/year=YYYY/week_start_date=YYYY-MM-DD/weekly_market_metrics_YYYY-MM-DD.parquet` | Parquet | `gvkey, iid, week_start_date` | Yes, by year/week_start_date | Duplicate ticker-week, duplicate security-week, one week end per week start, ticker coverage warning, legacy `week_end_date` cleanup logging |
 | 6 | `server_pipeline/daily/build_recent_daily_volume_metrics_s3.py` | Feature engineering | Date-partitioned daily market metrics | `processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet` | Parquet | `gvkey, iid, date` inside recent window | No, intentionally one snapshot file | Daily partition count, output rows, unique tickers, date range, latest date |
-| 7 | `server_pipeline/screening/build_final_screening_results_s3.py` | Screening | Daily market metrics, weekly market metrics, annual growth history, quarterly growth history | `results/screening_results/<param_tag>/screening_results.parquet`; `results/screening_results/<param_tag>/screening_results.csv` | Parquet and CSV | `gvkey, iid` at one screening date | Yes, by screening parameter folder | Output rows, screening date, unique tickers, counts for flags A/B/AB/C/D/CD/E/F/G/H/all |
 
 ## Data Lineage Diagram
 
@@ -80,13 +77,6 @@ flowchart TD
     PDM --> RDV["build_recent_daily_volume_metrics_s3.py"]
     RDV --> PRV["S3 recent volume snapshot<br/>processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet"]
 
-    PDM --> SCR["build_final_screening_results_s3.py"]
-    PWM --> SCR
-    PFH --> SCR
-    PRV -. "related feature snapshot, not currently joined by final screening script" .-> SCR
-
-    SCR --> RES["S3 final results<br/>results/screening_results/&lt;param_tag&gt;/screening_results.parquet<br/>results/screening_results/&lt;param_tag&gt;/screening_results.csv"]
-
     PDM --> SUPA["Supabase serving tables<br/>security_feature_snapshot<br/>annual_growth_history<br/>quarterly_growth_history"]
     PWM --> SUPA
     PFH --> SUPA
@@ -106,10 +96,6 @@ The processed layer stores reusable feature tables:
 - Daily market indicators and daily helper flags.
 - Weekly market indicators and weekly helper flags.
 - Recent daily volume snapshot used as a compact feature layer.
-
-### `results/`
-
-The results layer stores parameterized screening outputs. A folder such as `n10_annual3_quarter4_q5_m3` identifies the screening thresholds used to produce that output.
 
 ### Supabase Serving Layer
 
@@ -161,7 +147,7 @@ processed/annual_fundamental_growth_history/annual_fundamental_growth_history.pa
 processed/quarterly_fundamental_growth_history/quarterly_fundamental_growth_history.parquet
 ```
 
-Both outputs include rank fields (`annual_rank_desc`, `quarterly_rank_desc`) so final screening can select recent annual or quarterly windows.
+Both outputs include rank fields (`annual_rank_desc`, `quarterly_rank_desc`) so downstream serving or screening logic can select recent annual or quarterly windows.
 
 ### C. Daily Market Metrics
 
@@ -223,39 +209,11 @@ processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet
 
 It is different from `daily_market_metrics` and `weekly_market_metrics`. Those are time-series feature tables partitioned by date/week. `recent_daily_volume_metrics` is a compact feature layer for recent volume analysis and screening support; it stores recent rows with `latest_date` and `window_start_date` columns so consumers can see the snapshot window.
 
-### F. Final Screening Results
+### F. Dynamic Signal Evaluation
 
-`server_pipeline/screening/build_final_screening_results_s3.py` joins four S3-backed inputs:
+The full pipeline now stops after processed feature creation. It does not create final `results/screening_results/...` files by default. Dynamic A-H conditions should be evaluated in the application or serving layer from processed S3 features and Supabase serving tables.
 
-- Date-partitioned daily market metrics.
-- Week-start-partitioned weekly market metrics.
-- Annual fundamental growth history.
-- Quarterly fundamental growth history.
-
-The final script writes:
-
-```text
-results/screening_results/<param_tag>/screening_results.parquet
-results/screening_results/<param_tag>/screening_results.csv
-```
-
-By default, these main output files apply a universe-quality filter that removes likely non-operating securities such as SPACs, acquisition companies, redeemable securities, warrants, rights, and units. The filter is applied only in the final screening layer; raw and processed data remain unfiltered for auditability.
-
-The default parameter folder is:
-
-```text
-n10_annual3_quarter4_q5_m3
-```
-
-This means:
-
-- `n10`: revenue and operating income growth threshold is 10 percent.
-- `annual3`: require three recent annual YoY growth observations for flag A.
-- `quarter4`: require four recent quarterly YoY growth observations for flag B.
-- `q5`: volume surge threshold is volume ratio >= 5.
-- `m3`: require at least three surge days in the recent three-month window for flag D.
-
-Major final flags:
+Major signal fields:
 
 | Flag | Meaning in code |
 |---|---|
@@ -271,70 +229,7 @@ Major final flags:
 | `flag_h` | Weekly moving-average crossover helper flag from the weekly metrics step. |
 | `flag_all` | `flag_a`, `flag_b`, `flag_c`, `flag_d`, `flag_f`, and `flag_h` are all true. |
 
-The default strict screening can return zero full-pass `flag_all` candidates. That is not necessarily a pipeline failure. Intermediate flag counts such as `flag_ab`, `flag_cd`, `flag_f`, or `flag_h` still show that each signal component is producing output. Relaxed screening parameters can be used to inspect broader candidate sets.
-
-### Universe-Quality Filter
-
-The universe-quality filter is implemented in `server_pipeline/screening/build_final_screening_results_s3.py` after the full candidate table is built and before the main output is written.
-
-The filter currently checks available text fields including `ticker`, `company_name`, and `iid`. It excludes rows matching specific security-type patterns:
-
-- `-REDH` or `REDH`
-- `REDEEM` or `REDEEMABLE`
-- `WARRANT` or `WARRANTS`
-- `RIGHT` or `RIGHTS`
-- `UNIT` or `UNITS`
-- `ACQUISITION`, `ACQ`, `ACQ.`, `ACQUTN`
-- `BLANK CHECK`
-- `SPAC`
-
-The filter intentionally does not use broad words such as `CAPITAL`, because those can appear in normal operating company names.
-
-The script adds two audit columns before filtering:
-
-- `is_excluded_universe`
-- `exclusion_reason`
-
-Main filtered outputs:
-
-```text
-results/screening_results/<param_tag>/screening_results.parquet
-results/screening_results/<param_tag>/screening_results.csv
-```
-
-Excluded-universe audit outputs:
-
-```text
-results/screening_results/<param_tag>/excluded_universe/excluded_universe.parquet
-results/screening_results/<param_tag>/excluded_universe/excluded_universe.csv
-```
-
-Screening summary output:
-
-```text
-results/screening_results/<param_tag>/screening_summary.json
-```
-
-The summary includes row counts before and after filtering, excluded row count, flag counts before and after filtering, `flag_all` counts, and top exclusion reasons.
-
-To disable the filter for comparison:
-
-```bash
-python3 server_pipeline/screening/build_final_screening_results_s3.py --disable-universe-filter
-```
-
-To also write unfiltered comparison snapshots:
-
-```bash
-python3 server_pipeline/screening/build_final_screening_results_s3.py --write-unfiltered-audit
-```
-
-Unfiltered comparison snapshots are written to:
-
-```text
-results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.parquet
-results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.csv
-```
+Because Condition D depends on configurable `q` and `m` values, it should be calculated dynamically from daily `volume_ratio` history instead of stored as one fixed count.
 
 ## Data Grain Table
 
@@ -348,7 +243,6 @@ results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.cs
 | Daily market metrics | `gvkey, iid, date` |
 | Weekly market metrics | `gvkey, iid, week_start_date` |
 | Recent daily volume metrics | `gvkey, iid, date` within latest snapshot window |
-| Final screening results | `gvkey, iid` at one `screening_date` |
 
 ## S3 Output Table
 
@@ -364,11 +258,6 @@ results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.cs
 | Daily market metrics | `processed/daily_market_metrics/year=YYYY/month=MM/date=YYYY-MM-DD/daily_market_metrics_YYYY-MM-DD.parquet` | Year/month/date |
 | Weekly market metrics | `processed/weekly_market_metrics/year=YYYY/week_start_date=YYYY-MM-DD/weekly_market_metrics_YYYY-MM-DD.parquet` | Year/week_start_date |
 | Recent daily volume metrics | `processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet` | Single snapshot file |
-| Final screening Parquet | `results/screening_results/<param_tag>/screening_results.parquet` | Parameter folder |
-| Final screening CSV | `results/screening_results/<param_tag>/screening_results.csv` | Parameter folder |
-| Excluded universe audit | `results/screening_results/<param_tag>/excluded_universe/excluded_universe.parquet`; `results/screening_results/<param_tag>/excluded_universe/excluded_universe.csv` | Parameter folder |
-| Screening summary | `results/screening_results/<param_tag>/screening_summary.json` | Parameter folder |
-| Optional unfiltered comparison | `results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.parquet`; `results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.csv` | Parameter folder |
 
 ## Validation Checks Table
 
@@ -380,15 +269,12 @@ results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.cs
 | Daily market metrics | Selected files, target dates, output rows, unique tickers, date range, duplicate `gvkey/iid/date`, helper flag counts |
 | Weekly market metrics | Selected files, row counts, unique tickers, week ranges, duplicate ticker-week, duplicate `gvkey/iid/week_start_date`, one week end per week start, ticker coverage warning, old prefix cleanup logging |
 | Recent daily volume metrics | Number of input daily partitions, output rows, unique tickers, date range, latest date |
-| Final screening | Input partition counts, parameter values, row counts before and after universe filtering, excluded-universe count, screening date, unique tickers, counts for every screening flag before and after filtering, top exclusion reasons |
 
 ## Known Design Choices
 
 - `weekly_market_metrics` is partitioned by `week_start_date` because it is a time-series feature table and the partition must remain stable while the current week updates.
 - `recent_daily_volume_metrics` is intentionally kept as a single feature snapshot file because it represents the current recent-volume feature layer for downstream inspection and screening support.
-- The final screening default thresholds are strict and can return zero `flag_all` candidates.
-- Relaxed screening parameters can be used to inspect broader candidate sets, for example lower `--n-pct`, lower `--q`, or shorter annual/quarterly lookbacks.
-- The universe-quality filter is applied in the final screening layer, not during raw extraction, so excluded securities remain auditable in raw and processed data.
+- The full runner stops after processed feature creation; application-facing queries should use Supabase serving tables loaded from those processed features.
 - `server_pipeline/` is the current EC2/S3-backed implementation. Some files under `scripts/` are older local utilities or one-off checks and are not part of the current full runner.
 
 ## Current Limitations
@@ -396,14 +282,11 @@ results/screening_results/<param_tag>/unfiltered/screening_results_unfiltered.cs
 - The extraction steps require WRDS network access, `WRDS_USERNAME`, and a correctly permissioned `~/.pgpass`.
 - Daily and weekly market metrics are incremental by default. Larger historical rebuilds require explicit arguments, such as `--start-week-date` for weekly metrics.
 - `recent_daily_volume_metrics` is produced as a snapshot file, not a partitioned historical feature table.
-- The final screening script currently joins daily metrics, weekly metrics, and fundamental growth histories directly; the recent volume snapshot is produced as a supporting feature layer but is not currently a separate input to the final screening SQL.
-- The default final screen can be too strict for demonstration if no `flag_all` candidates appear.
-- The universe-quality filter is regex based and uses available text fields. It is configurable and auditable, but it may still require occasional review as new security naming patterns appear.
+- Universe-audit fields are not yet promoted into the processed serving inputs; the Supabase loader currently sets `is_excluded_universe = false` and `exclusion_reason = null`.
 
 ## Next Improvement Ideas
 
 - Add a lightweight data quality report that summarizes S3 row counts and date coverage after each full run.
-- Add a relaxed-parameter screening example to the runbook for portfolio demos.
 - Add CI checks for import/compile validation and simple static checks.
 - Add optional historical rebuild commands for daily and weekly processed features.
-- Consider a final HTML or notebook report that displays top candidates and intermediate flag counts without exposing secrets.
+- Consider an app or notebook view that computes dynamic A-H conditions from Supabase without exposing secrets.
