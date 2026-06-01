@@ -48,7 +48,7 @@ This is the actual order defined in [`server_pipeline/run_full_pipeline.py`](../
 
 | Step | Script | Category | Input source | Output path | Format | Grain | Partitioned | Validation checks |
 |---:|---|---|---|---|---|---|---|---|
-| 1 | `server_pipeline/fundamentals/extract_compustat_fundamentals_s3.py` | Extraction | WRDS `comp.funda`, `comp.fundq`, filtered by active NASDAQ securities from `comp.secd` | `raw/compustat_annual/extract_date=YYYY-MM-DD/compustat_annual.parquet`; `raw/compustat_annual/latest/compustat_annual.parquet`; `raw/compustat_quarterly/extract_date=YYYY-MM-DD/compustat_quarterly.parquet`; `raw/compustat_quarterly/latest/compustat_quarterly.parquet` | Parquet | Annual: `gvkey, fyear`; quarterly: `gvkey, fyearq, fqtr` | Versioned by `extract_date`; stable `latest` snapshot | Row counts, unique GVKEYs, fiscal/date ranges, missing key measures, duplicate annual/quarterly keys |
+| 1 | `server_pipeline/fundamentals/extract_compustat_fundamentals_s3.py` | Extraction | WRDS `comp.funda`, `comp.fundq`, filtered by active NASDAQ securities from `comp.secd` | `raw/compustat_annual/latest/compustat_annual.parquet`; `raw/compustat_quarterly/latest/compustat_quarterly.parquet` | Parquet | Annual: `gvkey, fyear`; quarterly: `gvkey, fyearq, fqtr` | Stable `latest` snapshot only | Row counts, unique GVKEYs, fiscal/date ranges, missing key measures, duplicate annual/quarterly keys, old `extract_date=...` cleanup logging |
 | 2 | `server_pipeline/daily/extract_compustat_daily_incremental_s3.py` | Extraction | WRDS `comp.secd` latest trading dates | `raw/compustat_daily_security/year=YYYY/month=MM/date=YYYY-MM-DD/compustat_daily_security_YYYY-MM-DD.parquet` | Parquet | `gvkey, iid, date` | Yes, by year/month/date | Latest dates printed, rows per date, unique tickers, empty-date warning |
 | 3 | `server_pipeline/fundamentals/build_fundamental_growth_history_s3.py` | Transformation | Raw annual and quarterly `latest` fundamentals | `processed/annual_fundamental_growth_history/annual_fundamental_growth_history.parquet`; `processed/quarterly_fundamental_growth_history/quarterly_fundamental_growth_history.parquet` | Parquet | Annual: `gvkey, fyear`; quarterly: `gvkey, fyearq, fqtr` | No, single feature history files | Row counts, unique GVKEYs, ranges, valid growth-pair counts, duplicate key counts |
 | 4 | `server_pipeline/daily/build_daily_market_metrics_s3.py` | Feature engineering | Raw daily security files, including yearly warm-up files and date-partitioned daily raw files | `processed/daily_market_metrics/year=YYYY/month=MM/date=YYYY-MM-DD/daily_market_metrics_YYYY-MM-DD.parquet` | Parquet | `gvkey, iid, date` | Yes, by year/month/date | Selected raw files, target dates, row counts, unique tickers, date range, duplicate `gvkey/iid/date`, flag counts |
@@ -119,11 +119,17 @@ Important annual fields include `gvkey`, `datadate`, `fyear`, `ticker`, `company
 
 Important quarterly fields include `gvkey`, `datadate`, `fyearq`, `fqtr`, `ticker`, `company_name`, `saleq`, `revtq`, `oiadpq`, `atq`, `cshoq`, `prccq`, and `mkvaltq`.
 
-The script writes both versioned extract files and stable `latest` files. `latest` means the current canonical raw fundamentals snapshot used by downstream processing:
+The script writes only stable `latest` files. `latest` means the current canonical raw fundamentals snapshot used by downstream processing:
 
 ```text
 raw/compustat_annual/latest/compustat_annual.parquet
 raw/compustat_quarterly/latest/compustat_quarterly.parquet
+```
+
+Old `raw/compustat_annual/extract_date=...` and `raw/compustat_quarterly/extract_date=...` prefixes are deleted by default after the latest files are written. The script logs each exact S3 object before deleting it. To clean old versioned extracts without downloading from WRDS, run:
+
+```bash
+python3 server_pipeline/fundamentals/extract_compustat_fundamentals_s3.py --cleanup-old-extracts-only
 ```
 
 `server_pipeline/daily/extract_compustat_daily_incremental_s3.py` extracts latest daily security rows from WRDS `comp.secd`. It first asks WRDS for the most recent trading dates, then downloads each date and writes date-partitioned raw Parquet:
@@ -248,9 +254,7 @@ Because Condition D depends on configurable `q` and `m` values, it should be cal
 
 | Output | Path pattern | Partitioning |
 |---|---|---|
-| Annual fundamentals raw extract | `raw/compustat_annual/extract_date=YYYY-MM-DD/compustat_annual.parquet` | Extract date |
 | Annual fundamentals latest | `raw/compustat_annual/latest/compustat_annual.parquet` | Stable latest file |
-| Quarterly fundamentals raw extract | `raw/compustat_quarterly/extract_date=YYYY-MM-DD/compustat_quarterly.parquet` | Extract date |
 | Quarterly fundamentals latest | `raw/compustat_quarterly/latest/compustat_quarterly.parquet` | Stable latest file |
 | Daily security raw | `raw/compustat_daily_security/year=YYYY/month=MM/date=YYYY-MM-DD/compustat_daily_security_YYYY-MM-DD.parquet` | Year/month/date |
 | Annual growth history | `processed/annual_fundamental_growth_history/annual_fundamental_growth_history.parquet` | Single file |

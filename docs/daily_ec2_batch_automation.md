@@ -177,6 +177,19 @@ cd /home/ec2-user/projects/nasdaq-stock-recommendation
 bash scripts/create_eventbridge_start_ec2_schedule.sh
 ```
 
+Run this command from AWS CloudShell or an AWS CLI profile with IAM and Scheduler administration permissions. The EC2 batch role normally should not be granted broad `iam:CreateRole` permissions just to bootstrap the scheduler.
+
+If Scheduler reports that the execution role cannot be assumed, wait a minute and rerun the script. IAM trust-policy propagation can lag briefly after the role is created or updated. You can inspect the trust policy with:
+
+```bash
+aws iam get-role \
+  --role-name NasdaqStartEC2SchedulerRole \
+  --query 'Role.AssumeRolePolicyDocument' \
+  --output json
+```
+
+It must include `scheduler.amazonaws.com` as the trusted service principal.
+
 The schedule is:
 
 ```text

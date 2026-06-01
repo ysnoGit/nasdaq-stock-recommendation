@@ -162,6 +162,12 @@ s3://nasdaq-stock-recommendation/raw/compustat_annual/latest/compustat_annual.pa
 s3://nasdaq-stock-recommendation/raw/compustat_quarterly/latest/compustat_quarterly.parquet
 ```
 
+Raw fundamentals are kept as latest-only snapshots. Old versioned fundamentals folders such as `raw/compustat_annual/extract_date=...` and `raw/compustat_quarterly/extract_date=...` are cleaned by the fundamentals extraction step. To clean those old folders without running WRDS extraction:
+
+```bash
+python3 server_pipeline/fundamentals/extract_compustat_fundamentals_s3.py --cleanup-old-extracts-only
+```
+
 Known processed feature outputs:
 
 ```text

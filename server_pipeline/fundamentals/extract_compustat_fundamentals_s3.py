@@ -1,5 +1,4 @@
 import argparse
-from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 import sys
@@ -28,6 +27,49 @@ def upload_df_to_s3_parquet(df: pd.DataFrame, s3_key: str) -> None:
         Key=s3_key,
         Body=buffer.getvalue(),
     )
+
+
+def list_keys(prefix: str) -> list[str]:
+    s3 = boto3.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+    keys = []
+
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+        keys.extend(obj["Key"] for obj in page.get("Contents", []))
+
+    return keys
+
+
+def delete_s3_keys(keys: list[str]) -> None:
+    if not keys:
+        return
+
+    s3 = boto3.client("s3")
+    for start in range(0, len(keys), 1000):
+        batch = keys[start:start + 1000]
+        s3.delete_objects(
+            Bucket=S3_BUCKET,
+            Delete={"Objects": [{"Key": key} for key in batch]},
+        )
+
+
+def cleanup_versioned_extracts() -> None:
+    versioned_prefixes = [
+        f"{RAW_ANNUAL_PREFIX}/extract_date=",
+        f"{RAW_QUARTERLY_PREFIX}/extract_date=",
+    ]
+
+    print("\nCleaning old versioned fundamentals extracts.")
+    for prefix in versioned_prefixes:
+        keys = list_keys(prefix)
+        if not keys:
+            print(f"No old objects found under s3://{S3_BUCKET}/{prefix}")
+            continue
+
+        print(f"Deleting {len(keys):,} objects under s3://{S3_BUCKET}/{prefix}")
+        for key in keys:
+            print(f"  delete s3://{S3_BUCKET}/{key}")
+        delete_s3_keys(keys)
 
 
 def validate_annual(df: pd.DataFrame) -> None:
@@ -170,10 +212,23 @@ def main() -> None:
         default="2019-01-01",
         help="Earliest datadate for quarterly fundamentals.",
     )
+    parser.add_argument(
+        "--cleanup-old-extracts-only",
+        action="store_true",
+        help="Delete old raw fundamentals extract_date=... prefixes and exit.",
+    )
+    parser.add_argument(
+        "--skip-cleanup-old-extracts",
+        action="store_true",
+        help="Do not delete old raw fundamentals extract_date=... prefixes after writing latest.",
+    )
 
     args = parser.parse_args()
 
-    extract_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if args.cleanup_old_extracts_only:
+        cleanup_versioned_extracts()
+        print("Done.")
+        return
 
     print("Connecting to WRDS...")
     conn = get_wrds_connection()
@@ -185,25 +240,20 @@ def main() -> None:
         conn.close()
         print("WRDS connection closed.")
 
-    # Store versioned raw files.
-    annual_versioned_key = (
-        f"{RAW_ANNUAL_PREFIX}/extract_date={extract_date}/compustat_annual.parquet"
-    )
-    quarterly_versioned_key = (
-        f"{RAW_QUARTERLY_PREFIX}/extract_date={extract_date}/compustat_quarterly.parquet"
-    )
-
-    # Store stable latest raw files for processing.
+    # Store only stable latest raw files for processing.
     annual_latest_key = f"{RAW_ANNUAL_PREFIX}/latest/compustat_annual.parquet"
     quarterly_latest_key = f"{RAW_QUARTERLY_PREFIX}/latest/compustat_quarterly.parquet"
 
-    for key in [annual_versioned_key, annual_latest_key]:
-        upload_df_to_s3_parquet(annual_df, key)
-        print(f"Uploaded annual fundamentals to s3://{S3_BUCKET}/{key}")
+    upload_df_to_s3_parquet(annual_df, annual_latest_key)
+    print(f"Uploaded annual fundamentals to s3://{S3_BUCKET}/{annual_latest_key}")
 
-    for key in [quarterly_versioned_key, quarterly_latest_key]:
-        upload_df_to_s3_parquet(quarterly_df, key)
-        print(f"Uploaded quarterly fundamentals to s3://{S3_BUCKET}/{key}")
+    upload_df_to_s3_parquet(quarterly_df, quarterly_latest_key)
+    print(f"Uploaded quarterly fundamentals to s3://{S3_BUCKET}/{quarterly_latest_key}")
+
+    if args.skip_cleanup_old_extracts:
+        print("Skipping old extract_date=... cleanup.")
+    else:
+        cleanup_versioned_extracts()
 
     print("Done.")
 
