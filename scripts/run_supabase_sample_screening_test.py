@@ -32,6 +32,21 @@ def scalar(cur, sql: str, params: dict[str, Any] | None = None) -> Any:
     return cur.fetchone()[0]
 
 
+def table_exists(cur, table: str) -> bool:
+    cur.execute("SELECT to_regclass(%s)", (table,))
+    return cur.fetchone()[0] is not None
+
+
+def require_tables(cur, tables: list[str]) -> None:
+    missing = [table for table in tables if not table_exists(cur, table)]
+    if missing:
+        raise RuntimeError(
+            "Missing Supabase serving table(s): "
+            f"{', '.join(missing)}. Run:\n"
+            "bash scripts/load_processed_features_to_supabase.sh --apply-schema"
+        )
+
+
 def run_sample_query(cur, label: str, params: dict[str, Any]) -> None:
     query = """
     WITH selected_snapshot AS (
@@ -146,6 +161,7 @@ def main() -> None:
                 "annual_growth_history",
                 "quarterly_growth_history",
             ]
+            require_tables(cur, tables)
             for table in tables:
                 count = scalar(cur, f"SELECT COUNT(*) FROM {table}")
                 print(f"{table}: {count:,} rows")
