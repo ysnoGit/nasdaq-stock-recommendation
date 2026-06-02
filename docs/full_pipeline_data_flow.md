@@ -73,10 +73,15 @@ flowchart TD
     DMM --> PDM["S3 processed daily market metrics<br/>processed/daily_market_metrics/year=/month=/date=/"]
     WMM --> PWM["S3 processed weekly market metrics<br/>processed/weekly_market_metrics/year=/week_start_date=/"]
 
-    PDM --> SUPA["Supabase serving tables<br/>security_feature_snapshot<br/>annual_growth_history<br/>quarterly_growth_history"]
-    PWM --> SUPA
-    PFH --> SUPA
-    SUPA --> DYN["Dynamic Condition D query<br/>3 months of volume_ratio history"]
+    PDM --> SM["Supabase security_master<br/>identity + universe filter"]
+    PDM --> SFS["Supabase security_feature_snapshot<br/>daily time-varying features"]
+    PWM --> SFS
+    PFH --> AGH["Supabase annual_growth_history"]
+    PFH --> QGH["Supabase quarterly_growth_history"]
+    SM --> DYN["Supabase dynamic screening query"]
+    SFS --> DYN
+    AGH --> DYN
+    QGH --> DYN
 ```
 
 ## Data Layer Explanation
@@ -99,10 +104,13 @@ The processed layer stores reusable feature tables:
 Supabase is optional and is used only as a serving layer for app-facing relational queries. S3 remains the durable raw and processed data lake. The serving loader reads processed Parquet files and upserts:
 
 ```text
+security_master
 security_feature_snapshot
 annual_growth_history
 quarterly_growth_history
 ```
+
+`security_master` stores `ticker`, `company_name`, active status, and universe filter fields at `gvkey, iid` grain. `security_feature_snapshot` stores time-varying features at `snapshot_date, gvkey, iid` grain.
 
 Setup and commands are documented in [`docs/supabase_serving_layer.md`](supabase_serving_layer.md).
 
@@ -212,7 +220,7 @@ server_pipeline/daily/build_recent_daily_volume_metrics_s3.py
 
 Historical S3 files under `processed/recent_daily_volume_metrics/` may remain as old artifacts, but active runners and serving loaders no longer read or write them.
 
-Condition D now uses daily `volume_ratio` history loaded into `security_feature_snapshot`. The serving loader must retain at least three months of `security_feature_snapshot` rows so the app can calculate:
+Condition D now uses daily `volume_ratio` history loaded into `security_feature_snapshot`. Queries join `security_master` for display and universe filtering. The serving loader must retain at least three months of `security_feature_snapshot` rows so the app can calculate:
 
 ```sql
 WITH recent_volume AS (
@@ -260,6 +268,8 @@ Because Condition D depends on configurable `q` and `m` values, it should be cal
 | Raw daily security | `gvkey, iid, date` |
 | Annual growth history | `gvkey, fyear` |
 | Quarterly growth history | `gvkey, fyearq, fqtr` |
+| Security master | `gvkey, iid` |
+| Security feature snapshot | `snapshot_date, gvkey, iid` |
 | Daily market metrics | `gvkey, iid, date` |
 | Weekly market metrics | `gvkey, iid, week_start_date` |
 
@@ -297,7 +307,7 @@ Because Condition D depends on configurable `q` and `m` values, it should be cal
 - The extraction steps require WRDS network access, `WRDS_USERNAME`, and a correctly permissioned `~/.pgpass`.
 - Daily and weekly market metrics are incremental by default. Larger historical rebuilds require explicit arguments, such as `--start-week-date` for weekly metrics.
 - Historical S3 files under `processed/recent_daily_volume_metrics/` may remain, but they are old artifacts and are not read by the active pipeline.
-- Universe-audit fields are not yet promoted into the processed serving inputs; the Supabase loader currently sets `is_excluded_universe = false` and `exclusion_reason = null`.
+- Universe filter fields are calculated in the Supabase loader and stored in `security_master`.
 
 ## Next Improvement Ideas
 

@@ -22,6 +22,7 @@ from server_pipeline.config import (  # noqa: E402
     QUARTERLY_GROWTH_HISTORY_PREFIX,
     WEEKLY_MARKET_METRICS_PREFIX,
 )
+from server_pipeline.utils.universe_filter import add_universe_filter_columns  # noqa: E402
 
 
 ANNUAL_GROWTH_S3_PATH = (
@@ -45,6 +46,7 @@ def require_supabase_db_url() -> str:
 
 
 def connect_supabase():
+    db_url = require_supabase_db_url()
     try:
         import psycopg
     except ImportError as exc:
@@ -52,7 +54,7 @@ def connect_supabase():
             "psycopg is not installed. Run: python3 -m pip install 'psycopg[binary]'"
         ) from exc
 
-    return psycopg.connect(require_supabase_db_url())
+    return psycopg.connect(db_url)
 
 
 def s3_client():
@@ -153,6 +155,11 @@ def table_count(conn, table: str) -> int:
     with conn.cursor() as cur:
         cur.execute(f"SELECT COUNT(*) FROM {table}")
         return int(cur.fetchone()[0])
+
+
+def deactivate_security_master(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE security_master SET is_active = false, updated_at = now()")
 
 
 def upsert_dataframe(
@@ -296,7 +303,70 @@ def build_quarterly_rows() -> pd.DataFrame:
     return out
 
 
-def build_security_feature_rows(lookback_months: int) -> pd.DataFrame:
+def build_security_master_rows(daily: pd.DataFrame) -> pd.DataFrame:
+    identity_columns = [
+        "gvkey",
+        "iid",
+        "ticker",
+        "company_name",
+        "exchange_code",
+        "security_status",
+        "issue_type_code",
+        "snapshot_date",
+        "source_s3_path",
+    ]
+    missing = [column for column in identity_columns if column not in daily.columns]
+    if missing:
+        raise RuntimeError(f"Daily metrics parquet missing security master columns: {missing}")
+
+    latest_date = daily["snapshot_date"].max()
+    grouped = daily.groupby(["gvkey", "iid"], dropna=False)
+    first_seen = grouped["snapshot_date"].min().rename("first_seen_date")
+    last_seen = grouped["snapshot_date"].max().rename("last_seen_date")
+
+    latest_identity = (
+        daily.sort_values(["gvkey", "iid", "snapshot_date"])
+        .groupby(["gvkey", "iid"], as_index=False, dropna=False)
+        .tail(1)
+        .set_index(["gvkey", "iid"])
+    )
+
+    master = latest_identity.join(first_seen).join(last_seen).reset_index()
+    master = master.rename(columns={"issue_type_code": "security_type"})
+    master["is_active"] = master["last_seen_date"] == latest_date
+    master = add_universe_filter_columns(master)
+    master["updated_at"] = datetime.now(timezone.utc)
+
+    out = master[
+        [
+            "gvkey",
+            "iid",
+            "ticker",
+            "company_name",
+            "exchange_code",
+            "security_status",
+            "security_type",
+            "is_active",
+            "is_excluded_universe",
+            "exclusion_reason",
+            "first_seen_date",
+            "last_seen_date",
+            "source_s3_path",
+            "updated_at",
+        ]
+    ].copy()
+
+    duplicates = out.duplicated(["gvkey", "iid"]).sum()
+    if duplicates:
+        raise RuntimeError(f"security_master build produced duplicate primary keys: {duplicates:,}")
+
+    print(f"Security master rows built: {len(out):,}")
+    print(f"Security master active rows built: {int(out['is_active'].sum()):,}")
+    print(f"Security master excluded universe rows built: {int(out['is_excluded_universe'].sum()):,}")
+    return out
+
+
+def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     daily_paths = latest_daily_window(list_daily_metric_paths(), lookback_months)
     daily = read_many_parquet(daily_paths)
     print(f"Daily metric rows selected: {len(daily):,}")
@@ -317,6 +387,9 @@ def build_security_feature_rows(lookback_months: int) -> pd.DataFrame:
         "iid",
         "ticker",
         "company_name",
+        "exchange_code",
+        "security_status",
+        "issue_type_code",
         "close_price_raw",
         "adjusted_close_price",
         "volume",
@@ -385,6 +458,8 @@ def build_security_feature_rows(lookback_months: int) -> pd.DataFrame:
     daily["gvkey"] = daily["gvkey"].astype(str)
     daily["iid"] = daily["iid"].astype(str)
 
+    master_out = build_security_master_rows(daily)
+
     merged = daily.merge(
         weekly_subset,
         on=["gvkey", "iid", "week_start_date"],
@@ -398,8 +473,6 @@ def build_security_feature_rows(lookback_months: int) -> pd.DataFrame:
             "snapshot_date": merged["snapshot_date"],
             "gvkey": merged["gvkey"],
             "iid": merged["iid"],
-            "ticker": merged["ticker"],
-            "company_name": merged["company_name"],
             "close_price": merged["close_price_raw"],
             "adjusted_close_price": merged["adjusted_close_price"],
             "volume": merged["volume"],
@@ -420,10 +493,6 @@ def build_security_feature_rows(lookback_months: int) -> pd.DataFrame:
             "daily_f_confirmed_using_date": merged["snapshot_date"],
             "weekly_h_confirmation_pass": merged["flag_h"],
             "weekly_h_confirmed_using_date": merged["week_end_date"],
-            # TODO: If a processed universe audit feature is promoted upstream,
-            # map is_excluded_universe/exclusion_reason from that source.
-            "is_excluded_universe": False,
-            "exclusion_reason": None,
             "source_s3_path": merged["source_s3_path"],
             "updated_at": now,
         }
@@ -439,7 +508,7 @@ def build_security_feature_rows(lookback_months: int) -> pd.DataFrame:
     print(f"Security feature snapshot rows built: {len(out):,}")
     print(f"Security feature snapshot date range: {out['snapshot_date'].min()} to {out['snapshot_date'].max()}")
     print(f"Rows with weekly feature match: {out['week_end_date'].notna().sum():,}")
-    return out
+    return master_out, out
 
 
 def load_table(
@@ -468,6 +537,28 @@ def load_table(
         )
 
 
+def validate_security_master_active_count(conn, security_df: pd.DataFrame) -> None:
+    latest_snapshot_date = security_df["snapshot_date"].max()
+    latest_snapshot_count = (
+        security_df[security_df["snapshot_date"] == latest_snapshot_date][["gvkey", "iid"]]
+        .drop_duplicates()
+        .shape[0]
+    )
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM security_master WHERE is_active = true")
+        active_master_count = int(cur.fetchone()[0])
+
+    print(f"Latest security snapshot date: {latest_snapshot_date}")
+    print(f"Latest security snapshot keys: {latest_snapshot_count:,}")
+    print(f"Active security_master rows: {active_master_count:,}")
+    if active_master_count < latest_snapshot_count:
+        raise RuntimeError(
+            "security_master active-row validation failed: "
+            f"active_master_count={active_master_count:,}, "
+            f"latest_snapshot_count={latest_snapshot_count:,}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Load processed S3 feature outputs into Supabase serving tables."
@@ -485,7 +576,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--only",
-        choices=["security", "annual", "quarterly"],
+        choices=["security", "security-master", "annual", "quarterly"],
         help="Load only one serving table.",
     )
     args = parser.parse_args()
@@ -501,8 +592,34 @@ def main() -> None:
             apply_schema(conn)
 
         with conn.transaction():
+            if args.only in (None, "security", "security-master"):
+                security_master_df, security_df = build_security_serving_rows(args.lookback_months)
+                print("\nMarking existing security_master rows inactive before upsert...")
+                deactivate_security_master(conn)
+                load_table(
+                    conn,
+                    "security_master",
+                    security_master_df,
+                    [
+                        "gvkey",
+                        "iid",
+                        "ticker",
+                        "company_name",
+                        "exchange_code",
+                        "security_status",
+                        "security_type",
+                        "is_active",
+                        "is_excluded_universe",
+                        "exclusion_reason",
+                        "first_seen_date",
+                        "last_seen_date",
+                        "source_s3_path",
+                        "updated_at",
+                    ],
+                    ["gvkey", "iid"],
+                )
+
             if args.only in (None, "security"):
-                security_df = build_security_feature_rows(args.lookback_months)
                 load_table(
                     conn,
                     "security_feature_snapshot",
@@ -511,8 +628,6 @@ def main() -> None:
                         "snapshot_date",
                         "gvkey",
                         "iid",
-                        "ticker",
-                        "company_name",
                         "close_price",
                         "adjusted_close_price",
                         "volume",
@@ -533,13 +648,12 @@ def main() -> None:
                         "daily_f_confirmed_using_date",
                         "weekly_h_confirmation_pass",
                         "weekly_h_confirmed_using_date",
-                        "is_excluded_universe",
-                        "exclusion_reason",
                         "source_s3_path",
                         "updated_at",
                     ],
                     ["snapshot_date", "gvkey", "iid"],
                 )
+                validate_security_master_active_count(conn, security_df)
 
             if args.only in (None, "annual"):
                 annual_df = build_annual_rows()

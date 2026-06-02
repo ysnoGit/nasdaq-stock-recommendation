@@ -2,27 +2,20 @@
 
 ## Purpose
 
-S3 remains the source of truth for raw and processed pipeline data. Supabase PostgreSQL is a serving layer for application queries, dashboards, and portfolio demos that need indexed relational tables instead of scanning Parquet from S3.
+S3 remains the source of truth for raw and processed pipeline data. Supabase PostgreSQL is the application serving layer for indexed relational queries, dashboards, and portfolio demos.
 
-The serving loader reads processed S3 Parquet outputs and upserts them into three tables:
+The serving layer now uses four normalized tables:
 
-| Table | Purpose | Primary key |
+| Table | Grain | Purpose |
 |---|---|---|
-| `security_feature_snapshot` | Latest rolling daily security features with daily and weekly technical signals. | `snapshot_date, gvkey, iid` |
-| `annual_growth_history` | Annual fundamental growth history by security and fiscal year. | `gvkey, fyear` |
-| `quarterly_growth_history` | Quarterly fundamental growth history by security and fiscal quarter. | `gvkey, fyearq, fqtr` |
+| `security_master` | `gvkey, iid` | Security identity, active status, and universe filter fields. |
+| `security_feature_snapshot` | `snapshot_date, gvkey, iid` | Time-varying market, volume, daily MA, weekly MA, and F/H features. |
+| `annual_growth_history` | `gvkey, fyear` | Annual fundamental growth history. |
+| `quarterly_growth_history` | `gvkey, fyearq, fqtr` | Quarterly fundamental growth history. |
 
-The SQL schema lives in:
+`security_master` owns display and mostly-static identity fields such as `ticker`, `company_name`, `exchange_code`, `security_status`, `security_type`, `is_active`, `is_excluded_universe`, and `exclusion_reason`.
 
-```text
-sql/create_supabase_serving_tables.sql
-```
-
-The loader lives in:
-
-```text
-server_pipeline/serving/load_processed_features_to_supabase.py
-```
+`security_feature_snapshot` no longer owns display identity fields in the new schema. It should focus on time-varying feature values such as price, volume, moving averages, and daily/weekly confirmations.
 
 ## Inputs
 
@@ -37,110 +30,79 @@ s3://nasdaq-stock-recommendation/processed/quarterly_fundamental_growth_history/
 
 The loader does not read `processed/recent_daily_volume_metrics/`. That snapshot belongs to the older S3-only screening design and is no longer part of the active serving flow.
 
-`security_feature_snapshot` loads the latest rolling window from daily market metrics. The default is three months:
+## Loader
 
-```bash
-python3 server_pipeline/serving/load_processed_features_to_supabase.py --only security --lookback-months 3
+Schema:
+
+```text
+sql/create_supabase_serving_tables.sql
 ```
 
-Weekly metrics are joined by `gvkey, iid, week_start_date`. The weekly S3 partition must use the stable `week_start_date` layout. Legacy `week_end_date=...` folders are not loaded by this serving script.
+Loader:
 
-## Environment
-
-Do not store Supabase credentials in code, docs, or Git. Set the connection URL only in the shell or EC2 environment:
-
-```bash
-export SUPABASE_DB_URL="postgresql://..."
+```text
+server_pipeline/serving/load_processed_features_to_supabase.py
 ```
 
-Use the project default AWS region:
-
-```bash
-export AWS_REGION="ap-northeast-2"
-export AWS_DEFAULT_REGION="ap-northeast-2"
-```
-
-## EC2 Commands
-
-From the EC2 project checkout:
-
-```bash
-cd ~/projects/nasdaq-stock-recommendation
-source venv/bin/activate
-python3 -m pip install -r requirements.txt
-
-export AWS_REGION="ap-northeast-2"
-export AWS_DEFAULT_REGION="ap-northeast-2"
-export SUPABASE_DB_URL="postgresql://..."
-
-python3 server_pipeline/serving/load_processed_features_to_supabase.py --apply-schema
-```
-
-The wrapper script is equivalent:
+Run all tables:
 
 ```bash
 bash scripts/load_processed_features_to_supabase.sh --apply-schema
 ```
 
-To load one table at a time:
+Normal recurring load after schema exists:
 
 ```bash
-python3 server_pipeline/serving/load_processed_features_to_supabase.py --only security --lookback-months 3
-python3 server_pipeline/serving/load_processed_features_to_supabase.py --only annual
-python3 server_pipeline/serving/load_processed_features_to_supabase.py --only quarterly
+bash scripts/load_processed_features_to_supabase.sh
 ```
 
-## Validation
+One-table options:
 
-The loader prints:
+```bash
+bash scripts/load_processed_features_to_supabase.sh --only security
+bash scripts/load_processed_features_to_supabase.sh --only security-master
+bash scripts/load_processed_features_to_supabase.sh --only annual
+bash scripts/load_processed_features_to_supabase.sh --only quarterly
+```
 
-- S3 bucket and lookback window.
-- Selected daily partition count and latest date.
-- Input row counts and input columns.
-- Built row counts.
-- Unique primary key counts prepared.
-- Table row counts before and after load.
+`--only security` loads both `security_master` and `security_feature_snapshot`, because the snapshot rows should always have matching master rows.
 
-Run these SQL checks in Supabase after the load:
+## Dynamic Screening
+
+Queries should join `security_feature_snapshot` to `security_master` for ticker, company name, active status, and universe filtering:
 
 ```sql
-select count(*) from security_feature_snapshot;
-select min(snapshot_date), max(snapshot_date), count(*) from security_feature_snapshot;
-select count(*) from annual_growth_history;
-select count(*) from quarterly_growth_history;
-select min(snapshot_date), max(snapshot_date), count(distinct snapshot_date)
-from security_feature_snapshot;
-select count(*) from security_feature_snapshot
-where volume_ratio is not null;
-
-select snapshot_date, gvkey, iid, count(*)
-from security_feature_snapshot
-group by snapshot_date, gvkey, iid
-having count(*) > 1;
+SELECT
+    s.snapshot_date,
+    sm.ticker,
+    sm.company_name,
+    s.gvkey,
+    s.iid,
+    s.volume_ratio,
+    sm.is_excluded_universe,
+    sm.exclusion_reason
+FROM security_feature_snapshot AS s
+JOIN security_master AS sm
+  ON s.gvkey = sm.gvkey
+ AND s.iid = sm.iid
+WHERE s.snapshot_date = :selected_date
+  AND (:universe_filter = false OR sm.is_excluded_universe = false);
 ```
 
-The duplicate-key query should return zero rows.
-
-## Current Signal Notes
-
-The serving table stores daily F confirmation and weekly H confirmation fields from the processed daily and weekly metrics.
-
-Conditions should be evaluated dynamically by the app or screening layer from the loaded history and feature tables:
+Conditions A-H should be evaluated dynamically:
 
 | Condition | Serving-layer source |
 |---|---|
 | A | `annual_growth_history`, using configurable annual growth thresholds and lookback counts. |
 | B | `quarterly_growth_history`, using configurable quarterly growth thresholds and lookback counts. |
-| C | `security_feature_snapshot.volume_ratio`, using the chosen latest `snapshot_date` and configurable `q` threshold. |
-| D | `security_feature_snapshot` daily `volume_ratio` history over the selected lookback window, using configurable `q` and `m`. |
-| E | `security_feature_snapshot` daily moving average columns: `ma20`, `ma50`, `ma100`. |
-| F | `security_feature_snapshot.daily_f_confirmation_pass`, mapped from processed daily `flag_f`. |
-| G | `security_feature_snapshot` weekly moving average columns: `wma5`, `wma10`, `wma30`. |
-| H | `security_feature_snapshot.weekly_h_confirmation_pass`, mapped from processed weekly `flag_h`. |
+| C | `security_feature_snapshot.volume_ratio`, using the selected snapshot date and configurable `q`. |
+| D | Three months of `security_feature_snapshot.volume_ratio` history with configurable `q` and `m`. |
+| E | `security_feature_snapshot.ma20`, `ma50`, `ma100`. |
+| F | `security_feature_snapshot.daily_f_confirmation_pass`. |
+| G | `security_feature_snapshot.wma5`, `wma10`, `wma30`. |
+| H | `security_feature_snapshot.weekly_h_confirmation_pass`. |
 
-Do not store a fixed `recent_volume_signal_count` in Supabase. Condition D should stay dynamic and should be calculated from daily `volume_ratio` history using configurable screening parameters. This keeps the serving layer reusable when `q` or `m` changes.
-
-Example Condition D query:
+Condition D:
 
 ```sql
 WITH recent_volume AS (
@@ -157,13 +119,75 @@ SELECT recent_c_count >= :m AS flag_d
 FROM recent_volume;
 ```
 
-Because this query looks back three months, the serving load must retain at least the latest three months of `security_feature_snapshot` rows.
+Because Condition D looks back three months, the serving load must retain at least the latest three months of `security_feature_snapshot` rows.
 
-The current processed daily and weekly feature files do not carry upstream universe-audit fields. For now, the serving loader sets:
+## Validation
 
-```text
-is_excluded_universe = false
-exclusion_reason = null
+The loader prints:
+
+- S3 bucket and lookback window.
+- Selected daily partition count and latest date.
+- Input row counts and input columns.
+- Built row counts.
+- Unique primary-key counts prepared.
+- Table row counts before and after load.
+- Active `security_master` count compared with the latest snapshot count.
+
+Run table checks:
+
+```sql
+select count(*) from security_master;
+select count(*) from security_feature_snapshot;
+select count(*) from annual_growth_history;
+select count(*) from quarterly_growth_history;
+
+select min(snapshot_date), max(snapshot_date), count(distinct snapshot_date)
+from security_feature_snapshot;
+
+select count(*)
+from security_feature_snapshot
+where volume_ratio is not null;
+
+select s.snapshot_date, s.gvkey, s.iid, count(*)
+from security_feature_snapshot as s
+group by s.snapshot_date, s.gvkey, s.iid
+having count(*) > 1;
 ```
 
-If universe-audit fields are promoted into a processed feature file later, map those fields in `build_security_feature_rows()`.
+Latest snapshot join check:
+
+```sql
+with latest as (
+    select max(snapshot_date) as snapshot_date
+    from security_feature_snapshot
+)
+select
+    count(*) as latest_rows,
+    count(sm.gvkey) as joined_master_rows
+from security_feature_snapshot as s
+cross join latest as l
+left join security_master as sm
+  on s.gvkey = sm.gvkey
+ and s.iid = sm.iid
+where s.snapshot_date = l.snapshot_date;
+```
+
+## Sample Screening Test
+
+Run:
+
+```bash
+python3 scripts/run_supabase_sample_screening_test.py
+```
+
+The script reads `SUPABASE_DB_URL` from the environment, validates all four tables, checks latest snapshot joins to `security_master`, verifies dynamic Condition D can be calculated, and prints strict and relaxed sample rows with `ticker` and `company_name` from `security_master`.
+
+## Existing Supabase Projects
+
+If your Supabase project already has the older `security_feature_snapshot` shape with `ticker`, `company_name`, `is_excluded_universe`, and `exclusion_reason`, read:
+
+```text
+docs/supabase_migration_notes.md
+```
+
+The migration path is non-destructive: create/backfill `security_master`, update queries to join it, and only remove old snapshot identity columns after the app is tested.

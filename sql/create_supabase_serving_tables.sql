@@ -1,39 +1,63 @@
-CREATE TABLE IF NOT EXISTS security_feature_snapshot (
-    snapshot_date date NOT NULL,
+CREATE TABLE IF NOT EXISTS security_master (
     gvkey text NOT NULL,
     iid text NOT NULL,
     ticker text,
     company_name text,
-    close_price double precision,
-    adjusted_close_price double precision,
-    volume double precision,
-    volume_ma30 double precision,
-    volume_ratio double precision,
+    exchange_code text,
+    security_status text,
+    security_type text,
+    is_active boolean,
+    is_excluded_universe boolean NOT NULL DEFAULT false,
+    exclusion_reason text,
+    first_seen_date date,
+    last_seen_date date,
+    source_s3_path text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (gvkey, iid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_master_ticker
+    ON security_master (ticker);
+
+CREATE INDEX IF NOT EXISTS idx_security_master_company_name
+    ON security_master (company_name);
+
+CREATE INDEX IF NOT EXISTS idx_security_master_is_excluded_universe
+    ON security_master (is_excluded_universe);
+
+CREATE INDEX IF NOT EXISTS idx_security_master_is_active
+    ON security_master (is_active);
+
+CREATE TABLE IF NOT EXISTS security_feature_snapshot (
+    snapshot_date date NOT NULL,
+    gvkey text NOT NULL,
+    iid text NOT NULL,
+    close_price numeric,
+    adjusted_close_price numeric,
+    volume numeric,
+    volume_ma30 numeric,
+    volume_ratio numeric,
     volume_lookback_start_date date,
     volume_lookback_end_date date,
-    ma20 double precision,
-    ma50 double precision,
-    ma100 double precision,
+    ma20 numeric,
+    ma50 numeric,
+    ma100 numeric,
     week_start_date date,
     week_end_date date,
-    weekly_close_price double precision,
-    wma5 double precision,
-    wma10 double precision,
-    wma30 double precision,
+    weekly_close_price numeric,
+    wma5 numeric,
+    wma10 numeric,
+    wma30 numeric,
     daily_f_confirmation_pass boolean,
     daily_f_confirmed_using_date date,
     weekly_h_confirmation_pass boolean,
     weekly_h_confirmed_using_date date,
-    is_excluded_universe boolean NOT NULL DEFAULT false,
-    exclusion_reason text,
     source_s3_path text,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (snapshot_date, gvkey, iid)
 );
-
-CREATE INDEX IF NOT EXISTS idx_security_feature_snapshot_ticker
-    ON security_feature_snapshot (ticker);
 
 CREATE INDEX IF NOT EXISTS idx_security_feature_snapshot_snapshot_date
     ON security_feature_snapshot (snapshot_date);

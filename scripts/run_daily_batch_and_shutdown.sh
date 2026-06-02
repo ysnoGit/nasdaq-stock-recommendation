@@ -129,6 +129,7 @@ import os
 import psycopg
 
 tables = [
+    "security_master",
     "security_feature_snapshot",
     "annual_growth_history",
     "quarterly_growth_history",
@@ -174,6 +175,29 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"]) as conn:
 
         if distinct_dates == 0:
             raise RuntimeError("security_feature_snapshot has no rows for dynamic Condition D.")
+
+        cur.execute("""
+            WITH latest AS (
+                SELECT MAX(snapshot_date) AS snapshot_date
+                FROM security_feature_snapshot
+            )
+            SELECT
+                COUNT(*) AS latest_rows,
+                COUNT(sm.gvkey) AS joined_master_rows
+            FROM security_feature_snapshot AS s
+            CROSS JOIN latest AS l
+            LEFT JOIN security_master AS sm
+              ON s.gvkey = sm.gvkey
+             AND s.iid = sm.iid
+            WHERE s.snapshot_date = l.snapshot_date
+        """)
+        latest_rows, joined_master_rows = cur.fetchone()
+        print(
+            "latest snapshot security_master join: "
+            f"{joined_master_rows:,}/{latest_rows:,} rows"
+        )
+        if joined_master_rows < latest_rows:
+            raise RuntimeError("Latest security snapshot rows do not all join to security_master.")
 PY
 
 echo

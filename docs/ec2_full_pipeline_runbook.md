@@ -127,6 +127,8 @@ The full pipeline now stops after processed feature creation. It no longer write
 bash scripts/load_processed_features_to_supabase.sh --apply-schema
 ```
 
+The Supabase serving load writes four tables: `security_master`, `security_feature_snapshot`, `annual_growth_history`, and `quarterly_growth_history`.
+
 Weekly market metrics use `week_start_date` as the stable S3 partition key:
 
 ```text

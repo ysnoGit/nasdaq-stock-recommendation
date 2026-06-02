@@ -88,6 +88,7 @@ bash scripts/load_processed_features_to_supabase.sh
 It then prints Supabase row counts for:
 
 ```text
+security_master
 security_feature_snapshot
 annual_growth_history
 quarterly_growth_history

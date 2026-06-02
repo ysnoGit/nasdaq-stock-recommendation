@@ -100,6 +100,16 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"]) as conn:
     with conn.cursor() as cur:
         cur.execute("SELECT current_database()")
         print(f"current_database: {cur.fetchone()[0]}")
+        expected_tables = [
+            "security_master",
+            "security_feature_snapshot",
+            "annual_growth_history",
+            "quarterly_growth_history",
+        ]
+        for table in expected_tables:
+            cur.execute("SELECT to_regclass(%s)", (table,))
+            exists = cur.fetchone()[0] is not None
+            print(f"{table}: {'exists' if exists else 'missing'}")
 PY
 else
   echo "SUPABASE_DB_URL: not set (skipping optional Supabase database check)"

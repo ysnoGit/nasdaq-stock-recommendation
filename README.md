@@ -8,7 +8,7 @@ The current pipeline follows a `raw -> processed` data layout in S3, with option
 
 - `raw/`: WRDS Compustat annual, quarterly, and daily security extracts.
 - `processed/`: reusable feature tables for fundamental growth, daily market metrics, and weekly market metrics.
-- Supabase serving layer: application-facing feature tables loaded from processed S3 outputs.
+- Supabase serving layer: normalized application-facing tables loaded from processed S3 outputs, including `security_master` for identity and `security_feature_snapshot` for time-varying features.
 
 Main EC2/S3 runner:
 
@@ -32,7 +32,7 @@ Detailed data lineage, output paths, table grains, validation checks, and design
 docs/full_pipeline_data_flow.md
 ```
 
-Supabase PostgreSQL can be used as an application serving layer on top of the processed S3 Parquet outputs. The loader upserts security feature snapshots plus annual and quarterly growth history without storing credentials in the repository:
+Supabase PostgreSQL can be used as an application serving layer on top of the processed S3 Parquet outputs. The loader upserts `security_master`, security feature snapshots, and annual/quarterly growth history without storing credentials in the repository:
 
 ```text
 docs/supabase_serving_layer.md

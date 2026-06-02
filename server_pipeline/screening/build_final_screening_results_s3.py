@@ -20,37 +20,10 @@ from server_pipeline.config import (
     SCREENING_RESULTS_PREFIX,
 )
 from server_pipeline.s3_duckdb import connect_duckdb_with_s3
-
-
-UNIVERSE_EXCLUSION_RULES = [
-    (
-        "redeemable marker",
-        re.compile(r"(^|\s)-REDH\b|\bREDH\b", re.IGNORECASE),
-    ),
-    (
-        "redeemable security",
-        re.compile(r"\bREDEEM(?:ABLE)?\b", re.IGNORECASE),
-    ),
-    (
-        "warrant security",
-        re.compile(r"\bWARRANTS?\b", re.IGNORECASE),
-    ),
-    (
-        "rights security",
-        re.compile(r"\bRIGHTS?\b", re.IGNORECASE),
-    ),
-    (
-        "unit security",
-        re.compile(r"\bUNITS?\b", re.IGNORECASE),
-    ),
-    (
-        "SPAC/acquisition company",
-        re.compile(
-            r"\bACQUISITION\b|\bACQ(?:\.|\s|$)|\bACQUTN\b|\bBLANK CHECK\b|\bSPAC\b",
-            re.IGNORECASE,
-        ),
-    ),
-]
+from server_pipeline.utils.universe_filter import (
+    add_universe_filter_columns,
+    universe_exclusion_reasons,
+)
 
 FLAG_COLUMNS = [
     "flag_a",
@@ -133,32 +106,6 @@ def upload_json_to_s3(payload: dict, s3_key: str) -> None:
         Body=json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"),
         ContentType="application/json",
     )
-
-
-def _universe_search_text(row: pd.Series) -> str:
-    parts = [
-        row.get("ticker"),
-        row.get("company_name"),
-        row.get("iid"),
-    ]
-    return " ".join("" if pd.isna(value) else str(value) for value in parts)
-
-
-def universe_exclusion_reasons(row: pd.Series) -> list[str]:
-    text = _universe_search_text(row)
-    return [
-        reason
-        for reason, pattern in UNIVERSE_EXCLUSION_RULES
-        if pattern.search(text)
-    ]
-
-
-def add_universe_filter_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    reasons = df.apply(universe_exclusion_reasons, axis=1)
-    df["exclusion_reason"] = reasons.apply(lambda items: "; ".join(items))
-    df["is_excluded_universe"] = df["exclusion_reason"] != ""
-    return df
 
 
 def flag_counts(df: pd.DataFrame) -> dict[str, int]:
