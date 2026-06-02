@@ -402,43 +402,81 @@ def build_security_master_rows(daily: pd.DataFrame) -> pd.DataFrame:
 
 def build_daily_f_confirmation(daily: pd.DataFrame) -> pd.DataFrame:
     confirmation = (
-        daily[["gvkey", "iid", "snapshot_date", "flag_f"]]
+        daily[
+            [
+                "gvkey",
+                "iid",
+                "snapshot_date",
+                "close_price_raw",
+                "adjusted_close_price",
+                "ma20",
+                "ma50",
+                "ma100",
+            ]
+        ]
         .copy()
         .sort_values(["gvkey", "iid", "snapshot_date"])
     )
     grouped = confirmation.groupby(["gvkey", "iid"], dropna=False)
     confirmation["daily_f_confirmed_using_date"] = grouped["snapshot_date"].shift(-1)
-    confirmation["daily_f_confirmation_pass"] = grouped["flag_f"].shift(-1)
+    confirmation["future_daily_close_price"] = grouped["close_price_raw"].shift(-1)
+    confirmation["future_daily_adjusted_close_price"] = grouped["adjusted_close_price"].shift(-1)
+    confirmation["future_daily_ma20"] = grouped["ma20"].shift(-1)
+    confirmation["future_daily_ma50"] = grouped["ma50"].shift(-1)
+    confirmation["future_daily_ma100"] = grouped["ma100"].shift(-1)
 
     has_future_row = (
         confirmation["daily_f_confirmed_using_date"].notna()
         & (confirmation["daily_f_confirmed_using_date"] > confirmation["snapshot_date"])
     )
-    confirmation["daily_f_confirmation_pass"] = (
-        confirmation["daily_f_confirmation_pass"].where(has_future_row, pd.NA).astype(object)
-    )
+    future_columns = [
+        "future_daily_close_price",
+        "future_daily_adjusted_close_price",
+        "future_daily_ma20",
+        "future_daily_ma50",
+        "future_daily_ma100",
+    ]
     confirmation["daily_f_confirmed_using_date"] = (
         confirmation["daily_f_confirmed_using_date"].where(has_future_row, pd.NA)
     )
+    for column in future_columns:
+        confirmation[column] = confirmation[column].where(has_future_row, pd.NA)
 
     return confirmation[
         [
             "gvkey",
             "iid",
             "snapshot_date",
-            "daily_f_confirmation_pass",
             "daily_f_confirmed_using_date",
+            "future_daily_ma20",
+            "future_daily_ma50",
+            "future_daily_ma100",
+            "future_daily_close_price",
+            "future_daily_adjusted_close_price",
         ]
     ]
 
 
 def build_weekly_h_confirmation(daily: pd.DataFrame, weekly: pd.DataFrame) -> pd.DataFrame:
     daily_keys = daily[["gvkey", "iid", "snapshot_date"]].drop_duplicates().copy()
-    daily_keys["weekly_h_confirmation_pass"] = pd.NA
     daily_keys["weekly_h_confirmed_using_date"] = pd.NA
+    daily_keys["future_weekly_wma5"] = pd.NA
+    daily_keys["future_weekly_wma10"] = pd.NA
+    daily_keys["future_weekly_wma30"] = pd.NA
+    daily_keys["future_weekly_close_price"] = pd.NA
 
     weekly_confirmation = (
-        weekly[["gvkey", "iid", "week_end_date", "flag_h"]]
+        weekly[
+            [
+                "gvkey",
+                "iid",
+                "week_end_date",
+                "weekly_close_price",
+                "wma5",
+                "wma10",
+                "wma30",
+            ]
+        ]
         .dropna(subset=["week_end_date"])
         .copy()
         .sort_values(["gvkey", "iid", "week_end_date"])
@@ -463,11 +501,20 @@ def build_weekly_h_confirmation(daily: pd.DataFrame, weekly: pd.DataFrame) -> pd
 
         target_index = daily_group.index[has_future_week]
         future_weekly_rows = weekly_group.iloc[next_indexes[has_future_week]]
-        daily_keys.loc[target_index, "weekly_h_confirmation_pass"] = (
-            future_weekly_rows["flag_h"].astype(object).to_numpy()
-        )
         daily_keys.loc[target_index, "weekly_h_confirmed_using_date"] = (
             future_weekly_rows["week_end_date"].to_numpy()
+        )
+        daily_keys.loc[target_index, "future_weekly_wma5"] = (
+            future_weekly_rows["wma5"].to_numpy()
+        )
+        daily_keys.loc[target_index, "future_weekly_wma10"] = (
+            future_weekly_rows["wma10"].to_numpy()
+        )
+        daily_keys.loc[target_index, "future_weekly_wma30"] = (
+            future_weekly_rows["wma30"].to_numpy()
+        )
+        daily_keys.loc[target_index, "future_weekly_close_price"] = (
+            future_weekly_rows["weekly_close_price"].to_numpy()
         )
 
     return daily_keys
@@ -483,21 +530,21 @@ def validate_confirmation_fields(df: pd.DataFrame) -> None:
             df["weekly_h_confirmed_using_date"].notna()
             & (df["weekly_h_confirmed_using_date"] <= df["snapshot_date"])
         ),
-        "bad_f_null_consistency_rows": (
+        "bad_daily_null_rows": (
             df["daily_f_confirmed_using_date"].isna()
-            & df["daily_f_confirmation_pass"].notna()
+            & (
+                df["future_daily_ma20"].notna()
+                | df["future_daily_ma50"].notna()
+                | df["future_daily_ma100"].notna()
+            )
         ),
-        "bad_h_null_consistency_rows": (
+        "bad_weekly_null_rows": (
             df["weekly_h_confirmed_using_date"].isna()
-            & df["weekly_h_confirmation_pass"].notna()
-        ),
-        "bad_f_evaluated_consistency_rows": (
-            df["daily_f_confirmed_using_date"].notna()
-            & df["daily_f_confirmation_pass"].isna()
-        ),
-        "bad_h_evaluated_consistency_rows": (
-            df["weekly_h_confirmed_using_date"].notna()
-            & df["weekly_h_confirmation_pass"].isna()
+            & (
+                df["future_weekly_wma5"].notna()
+                | df["future_weekly_wma10"].notna()
+                | df["future_weekly_wma30"].notna()
+            )
         ),
     }
     failures = {name: int(mask.sum()) for name, mask in checks.items() if int(mask.sum())}
@@ -505,16 +552,16 @@ def validate_confirmation_fields(df: pd.DataFrame) -> None:
         formatted = ", ".join(f"{name}={count:,}" for name, count in failures.items())
         raise RuntimeError(f"F/H confirmation validation failed: {formatted}")
 
-    print("F/H confirmation validation passed.")
+    print("Future F/H input validation passed.")
     print(
-        "Daily F evaluated rows: "
+        "Rows with future daily confirmation inputs: "
         f"{df['daily_f_confirmed_using_date'].notna().sum():,}; "
-        f"null rows: {df['daily_f_confirmed_using_date'].isna().sum():,}"
+        f"pending rows: {df['daily_f_confirmed_using_date'].isna().sum():,}"
     )
     print(
-        "Weekly H evaluated rows: "
+        "Rows with future weekly confirmation inputs: "
         f"{df['weekly_h_confirmed_using_date'].notna().sum():,}; "
-        f"null rows: {df['weekly_h_confirmed_using_date'].isna().sum():,}"
+        f"pending rows: {df['weekly_h_confirmed_using_date'].isna().sum():,}"
     )
 
 
@@ -550,7 +597,6 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
         "ma20",
         "ma50",
         "ma100",
-        "flag_f",
         "source_s3_path",
     ]
     weekly_required = [
@@ -562,7 +608,6 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
         "wma5",
         "wma10",
         "wma30",
-        "flag_h",
     ]
     missing_daily = [column for column in daily_required if column not in daily.columns]
     missing_weekly = [column for column in weekly_required if column not in weekly.columns]
@@ -594,7 +639,6 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
             "wma5",
             "wma10",
             "wma30",
-            "flag_h",
         ]
     ].copy()
     weekly_subset["gvkey"] = weekly_subset["gvkey"].astype(str)
@@ -653,10 +697,19 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
             "wma5": merged["wma5"],
             "wma10": merged["wma10"],
             "wma30": merged["wma30"],
-            "daily_f_confirmation_pass": merged["daily_f_confirmation_pass"],
+            "daily_f_confirmation_pass": pd.NA,
             "daily_f_confirmed_using_date": merged["daily_f_confirmed_using_date"],
-            "weekly_h_confirmation_pass": merged["weekly_h_confirmation_pass"],
+            "future_daily_ma20": merged["future_daily_ma20"],
+            "future_daily_ma50": merged["future_daily_ma50"],
+            "future_daily_ma100": merged["future_daily_ma100"],
+            "future_daily_close_price": merged["future_daily_close_price"],
+            "future_daily_adjusted_close_price": merged["future_daily_adjusted_close_price"],
+            "weekly_h_confirmation_pass": pd.NA,
             "weekly_h_confirmed_using_date": merged["weekly_h_confirmed_using_date"],
+            "future_weekly_wma5": merged["future_weekly_wma5"],
+            "future_weekly_wma10": merged["future_weekly_wma10"],
+            "future_weekly_wma30": merged["future_weekly_wma30"],
+            "future_weekly_close_price": merged["future_weekly_close_price"],
             "source_s3_path": merged["source_s3_path"],
             "updated_at": now,
         }
@@ -838,8 +891,17 @@ def main() -> None:
                         "wma30",
                         "daily_f_confirmation_pass",
                         "daily_f_confirmed_using_date",
+                        "future_daily_ma20",
+                        "future_daily_ma50",
+                        "future_daily_ma100",
+                        "future_daily_close_price",
+                        "future_daily_adjusted_close_price",
                         "weekly_h_confirmation_pass",
                         "weekly_h_confirmed_using_date",
+                        "future_weekly_wma5",
+                        "future_weekly_wma10",
+                        "future_weekly_wma30",
+                        "future_weekly_close_price",
                         "source_s3_path",
                         "updated_at",
                     ],

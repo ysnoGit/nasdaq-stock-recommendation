@@ -390,7 +390,8 @@ def main() -> None:
                 THEN TRUE ELSE FALSE
             END AS flag_e,
 
-            -- Helper flag only. Backend can recalculate official F dynamically.
+            -- Deprecated helper flag only. The Supabase serving layer calculates
+            -- official F dynamically from future_daily_* values and user tolerance.
             CASE
                 WHEN prev_ma20_ma50_ratio BETWEEN 0.99 AND 1.01
                  AND prev_ma20_ma100_ratio BETWEEN 0.99 AND 1.01

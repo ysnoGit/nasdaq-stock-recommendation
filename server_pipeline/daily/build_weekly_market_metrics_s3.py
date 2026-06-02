@@ -594,7 +594,8 @@ def main() -> None:
                 THEN TRUE ELSE FALSE
             END AS flag_g,
 
-            -- Helper flag only. Backend can recalculate official H dynamically.
+            -- Deprecated helper flag only. The Supabase serving layer calculates
+            -- official H dynamically from future_weekly_* values and user tolerance.
             CASE
                 WHEN w.prev_wma5_wma10_ratio BETWEEN 0.98 AND 1.02
                  AND w.prev_wma5_wma30_ratio BETWEEN 0.98 AND 1.02

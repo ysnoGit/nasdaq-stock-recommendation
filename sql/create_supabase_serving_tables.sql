@@ -51,13 +51,39 @@ CREATE TABLE IF NOT EXISTS security_feature_snapshot (
     wma30 numeric,
     daily_f_confirmation_pass boolean,
     daily_f_confirmed_using_date date,
+    future_daily_ma20 numeric,
+    future_daily_ma50 numeric,
+    future_daily_ma100 numeric,
+    future_daily_close_price numeric,
+    future_daily_adjusted_close_price numeric,
     weekly_h_confirmation_pass boolean,
     weekly_h_confirmed_using_date date,
+    future_weekly_wma5 numeric,
+    future_weekly_wma10 numeric,
+    future_weekly_wma30 numeric,
+    future_weekly_close_price numeric,
     source_s3_path text,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (snapshot_date, gvkey, iid)
 );
+
+ALTER TABLE security_feature_snapshot
+    ADD COLUMN IF NOT EXISTS future_daily_ma20 numeric,
+    ADD COLUMN IF NOT EXISTS future_daily_ma50 numeric,
+    ADD COLUMN IF NOT EXISTS future_daily_ma100 numeric,
+    ADD COLUMN IF NOT EXISTS future_daily_close_price numeric,
+    ADD COLUMN IF NOT EXISTS future_daily_adjusted_close_price numeric,
+    ADD COLUMN IF NOT EXISTS future_weekly_wma5 numeric,
+    ADD COLUMN IF NOT EXISTS future_weekly_wma10 numeric,
+    ADD COLUMN IF NOT EXISTS future_weekly_wma30 numeric,
+    ADD COLUMN IF NOT EXISTS future_weekly_close_price numeric;
+
+COMMENT ON COLUMN security_feature_snapshot.daily_f_confirmation_pass IS
+    'Deprecated. F is computed dynamically from future_daily_* columns and user-selected daily MA tolerance.';
+
+COMMENT ON COLUMN security_feature_snapshot.weekly_h_confirmation_pass IS
+    'Deprecated. H is computed dynamically from future_weekly_* columns and user-selected weekly MA tolerance.';
 
 CREATE INDEX IF NOT EXISTS idx_security_feature_snapshot_snapshot_date
     ON security_feature_snapshot (snapshot_date);

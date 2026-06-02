@@ -97,20 +97,20 @@ Conditions A-H should be evaluated dynamically:
 | B | `quarterly_growth_history`, using configurable quarterly growth thresholds and lookback counts. |
 | C | `security_feature_snapshot.volume_ratio`, using the selected snapshot date and configurable `q`. |
 | D | Three months of `security_feature_snapshot.volume_ratio` history with configurable `q` and `m`. |
-| E | `security_feature_snapshot.ma20`, `ma50`, `ma100`. |
-| F | `security_feature_snapshot.daily_f_confirmation_pass`. |
-| G | `security_feature_snapshot.wma5`, `wma10`, `wma30`. |
-| H | `security_feature_snapshot.weekly_h_confirmation_pass`. |
+| E | `security_feature_snapshot.ma20`, `ma50`, `ma100`, using configurable `daily_ma_tolerance_pct`. |
+| F | `future_daily_ma20`, `future_daily_ma50`, `future_daily_ma100`, using configurable `daily_ma_tolerance_pct`. |
+| G | `security_feature_snapshot.wma5`, `wma10`, `wma30`, using configurable `weekly_ma_tolerance_pct`. |
+| H | `future_weekly_wma5`, `future_weekly_wma10`, `future_weekly_wma30`, using configurable `weekly_ma_tolerance_pct`. |
 
-Stored F/H confirmation fields preserve future-data semantics:
+Stored F/H future-input fields preserve future-data semantics:
 
-- `daily_f_confirmation_pass = true/false` only when a next trading row exists for the same `gvkey, iid`.
 - `daily_f_confirmed_using_date` must be greater than `snapshot_date`.
-- `weekly_h_confirmation_pass = true/false` only when a future weekly confirmation row exists for the same `gvkey, iid`.
+- `future_daily_ma20`, `future_daily_ma50`, and `future_daily_ma100` come from the next trading row for the same `gvkey, iid`.
 - `weekly_h_confirmed_using_date` must be greater than `snapshot_date`.
+- `future_weekly_wma5`, `future_weekly_wma10`, and `future_weekly_wma30` come from the next future weekly row for the same `gvkey, iid`.
 - `NULL` means the future confirmation row does not exist yet, not that the condition failed.
 
-Screening queries may use `COALESCE(..., false)` at query time, but the stored table should keep `NULL` so the app can distinguish “failed” from “not confirmable yet.”
+`daily_f_confirmation_pass` and `weekly_h_confirmation_pass` are deprecated compatibility columns. They should not be used as final screening truth because F/H depend on user-selected tolerance values. Screening queries should compute F/H dynamically from the future input columns. Queries may use `COALESCE(..., false)` at query time for fully-confirmed screens, but stored fields should keep `NULL` so the app can distinguish “failed” from “not confirmable yet.”
 
 Condition D:
 
@@ -182,54 +182,56 @@ left join security_master as sm
 where s.snapshot_date = l.snapshot_date;
 ```
 
-F/H confirmation checks:
+Future F/H input checks:
 
 ```sql
-select count(*) as bad_f_rows
+select count(*) as bad_daily_future_date_rows
 from security_feature_snapshot
 where daily_f_confirmed_using_date is not null
   and daily_f_confirmed_using_date <= snapshot_date;
 
-select count(*) as bad_h_rows
+select count(*) as bad_weekly_future_date_rows
 from security_feature_snapshot
 where weekly_h_confirmed_using_date is not null
   and weekly_h_confirmed_using_date <= snapshot_date;
 
-select count(*) as bad_f_null_consistency_rows
+select count(*) as bad_daily_null_rows
 from security_feature_snapshot
 where daily_f_confirmed_using_date is null
-  and daily_f_confirmation_pass is not null;
+  and (
+      future_daily_ma20 is not null
+      or future_daily_ma50 is not null
+      or future_daily_ma100 is not null
+  );
 
-select count(*) as bad_h_null_consistency_rows
+select count(*) as bad_weekly_null_rows
 from security_feature_snapshot
 where weekly_h_confirmed_using_date is null
-  and weekly_h_confirmation_pass is not null;
-
-select count(*) as bad_f_evaluated_consistency_rows
-from security_feature_snapshot
-where daily_f_confirmed_using_date is not null
-  and daily_f_confirmation_pass is null;
-
-select count(*) as bad_h_evaluated_consistency_rows
-from security_feature_snapshot
-where weekly_h_confirmed_using_date is not null
-  and weekly_h_confirmation_pass is null;
+  and (
+      future_weekly_wma5 is not null
+      or future_weekly_wma10 is not null
+      or future_weekly_wma30 is not null
+  );
 ```
 
-Date-level F/H diagnostic:
+Date-level future-input availability:
 
 ```sql
 select
     snapshot_date,
     count(*) as rows,
-    count(*) filter (where daily_f_confirmation_pass is true) as f_true_rows,
-    count(*) filter (where daily_f_confirmation_pass is false) as f_false_rows,
-    count(*) filter (where daily_f_confirmation_pass is null) as f_null_rows,
-    count(*) filter (where daily_f_confirmed_using_date > snapshot_date) as f_future_confirmed_rows,
-    count(*) filter (where weekly_h_confirmation_pass is true) as h_true_rows,
-    count(*) filter (where weekly_h_confirmation_pass is false) as h_false_rows,
-    count(*) filter (where weekly_h_confirmation_pass is null) as h_null_rows,
-    count(*) filter (where weekly_h_confirmed_using_date > snapshot_date) as h_future_confirmed_rows
+    count(*) filter (
+        where daily_f_confirmed_using_date is not null
+    ) as rows_with_future_daily_confirmation,
+    count(*) filter (
+        where weekly_h_confirmed_using_date is not null
+    ) as rows_with_future_weekly_confirmation,
+    count(*) filter (
+        where daily_f_confirmed_using_date is null
+    ) as rows_pending_daily_confirmation,
+    count(*) filter (
+        where weekly_h_confirmed_using_date is null
+    ) as rows_pending_weekly_confirmation
 from security_feature_snapshot
 group by snapshot_date
 order by snapshot_date desc

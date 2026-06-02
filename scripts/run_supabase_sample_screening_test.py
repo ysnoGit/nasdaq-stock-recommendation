@@ -50,7 +50,7 @@ def require_tables(cur, tables: list[str]) -> None:
 def validate_confirmation_fields(cur) -> None:
     checks = [
         (
-            "bad_f_rows",
+            "bad_daily_future_date_rows",
             """
             SELECT COUNT(*)
             FROM security_feature_snapshot
@@ -59,7 +59,7 @@ def validate_confirmation_fields(cur) -> None:
             """,
         ),
         (
-            "bad_h_rows",
+            "bad_weekly_future_date_rows",
             """
             SELECT COUNT(*)
             FROM security_feature_snapshot
@@ -68,45 +68,35 @@ def validate_confirmation_fields(cur) -> None:
             """,
         ),
         (
-            "bad_f_null_consistency_rows",
+            "bad_daily_null_rows",
             """
             SELECT COUNT(*)
             FROM security_feature_snapshot
             WHERE daily_f_confirmed_using_date IS NULL
-              AND daily_f_confirmation_pass IS NOT NULL
+              AND (
+                  future_daily_ma20 IS NOT NULL
+                  OR future_daily_ma50 IS NOT NULL
+                  OR future_daily_ma100 IS NOT NULL
+              )
             """,
         ),
         (
-            "bad_h_null_consistency_rows",
+            "bad_weekly_null_rows",
             """
             SELECT COUNT(*)
             FROM security_feature_snapshot
             WHERE weekly_h_confirmed_using_date IS NULL
-              AND weekly_h_confirmation_pass IS NOT NULL
-            """,
-        ),
-        (
-            "bad_f_evaluated_consistency_rows",
-            """
-            SELECT COUNT(*)
-            FROM security_feature_snapshot
-            WHERE daily_f_confirmed_using_date IS NOT NULL
-              AND daily_f_confirmation_pass IS NULL
-            """,
-        ),
-        (
-            "bad_h_evaluated_consistency_rows",
-            """
-            SELECT COUNT(*)
-            FROM security_feature_snapshot
-            WHERE weekly_h_confirmed_using_date IS NOT NULL
-              AND weekly_h_confirmation_pass IS NULL
+              AND (
+                  future_weekly_wma5 IS NOT NULL
+                  OR future_weekly_wma10 IS NOT NULL
+                  OR future_weekly_wma30 IS NOT NULL
+              )
             """,
         ),
     ]
 
     failures = {}
-    print("\nF/H confirmation validation:")
+    print("\nFuture F/H input validation:")
     for label, sql in checks:
         count = int(scalar(cur, sql))
         print(f"{label}: {count:,}")
@@ -115,7 +105,7 @@ def validate_confirmation_fields(cur) -> None:
 
     if failures:
         formatted = ", ".join(f"{label}={count:,}" for label, count in failures.items())
-        raise RuntimeError(f"F/H confirmation validation failed: {formatted}")
+        raise RuntimeError(f"Future F/H input validation failed: {formatted}")
 
 
 def run_sample_query(cur, label: str, params: dict[str, Any]) -> None:
@@ -137,8 +127,8 @@ def run_sample_query(cur, label: str, params: dict[str, Any]) -> None:
             gvkey,
             COUNT(*) FILTER (
                 WHERE annual_rank_desc <= %(annual_years)s
-                  AND annual_revenue_growth >= %(n_pct)s
-                  AND annual_operating_income_growth >= %(n_pct)s
+                  AND annual_revenue_growth >= %(annual_growth_pct)s
+                  AND annual_operating_income_growth >= %(annual_growth_pct)s
             ) AS annual_pass_count
         FROM annual_growth_history
         WHERE annual_rank_desc <= %(annual_years)s
@@ -150,8 +140,8 @@ def run_sample_query(cur, label: str, params: dict[str, Any]) -> None:
             gvkey,
             COUNT(*) FILTER (
                 WHERE quarterly_rank_desc <= %(quarter_count)s
-                  AND quarterly_revenue_growth >= %(n_pct)s
-                  AND quarterly_operating_income_growth >= %(n_pct)s
+                  AND quarterly_revenue_growth >= %(quarterly_growth_pct)s
+                  AND quarterly_operating_income_growth >= %(quarterly_growth_pct)s
             ) AS quarterly_pass_count
         FROM quarterly_growth_history
         WHERE quarterly_rank_desc <= %(quarter_count)s
@@ -182,8 +172,44 @@ def run_sample_query(cur, label: str, params: dict[str, Any]) -> None:
         COALESCE(qf.quarterly_pass_count, 0) >= %(quarter_count)s AS flag_b,
         ld.volume_ratio >= %(q)s AS flag_c,
         COALESCE(rv.recent_c_count, 0) >= %(m)s AS flag_d,
-        ld.daily_f_confirmation_pass AS flag_f,
-        ld.weekly_h_confirmation_pass AS flag_h,
+        CASE
+            WHEN ld.daily_f_confirmed_using_date IS NULL
+              OR ld.future_daily_ma20 IS NULL
+              OR ld.future_daily_ma50 IS NULL
+              OR ld.future_daily_ma100 IS NULL
+            THEN NULL
+            WHEN ld.future_daily_ma50 = 0
+              OR ld.future_daily_ma100 = 0
+            THEN FALSE
+            ELSE (
+                ld.future_daily_ma20 / ld.future_daily_ma50
+                    BETWEEN %(daily_ma_lower_bound)s AND %(daily_ma_upper_bound)s
+                AND ld.future_daily_ma50 / ld.future_daily_ma100
+                    BETWEEN %(daily_ma_lower_bound)s AND %(daily_ma_upper_bound)s
+                AND ld.future_daily_ma20 / ld.future_daily_ma100
+                    BETWEEN %(daily_ma_lower_bound)s AND %(daily_ma_upper_bound)s
+            )
+        END AS flag_f,
+        CASE
+            WHEN ld.weekly_h_confirmed_using_date IS NULL
+              OR ld.future_weekly_wma5 IS NULL
+              OR ld.future_weekly_wma10 IS NULL
+              OR ld.future_weekly_wma30 IS NULL
+            THEN NULL
+            WHEN ld.future_weekly_wma10 = 0
+              OR ld.future_weekly_wma30 = 0
+            THEN FALSE
+            ELSE (
+                ld.future_weekly_wma5 / ld.future_weekly_wma10
+                    BETWEEN %(weekly_ma_lower_bound)s AND %(weekly_ma_upper_bound)s
+                AND ld.future_weekly_wma10 / ld.future_weekly_wma30
+                    BETWEEN %(weekly_ma_lower_bound)s AND %(weekly_ma_upper_bound)s
+                AND ld.future_weekly_wma5 / ld.future_weekly_wma30
+                    BETWEEN %(weekly_ma_lower_bound)s AND %(weekly_ma_upper_bound)s
+            )
+        END AS flag_h,
+        ld.daily_f_confirmed_using_date,
+        ld.weekly_h_confirmed_using_date,
         sm.is_excluded_universe,
         sm.exclusion_reason
     FROM latest_daily AS ld
@@ -278,12 +304,17 @@ def main() -> None:
 
             run_sample_query(
                 cur,
-                "Strict n=10%, annual=3, quarterly=4, q=5, m=3",
+                "Strict growth=10%, annual=3, quarterly=4, daily_tol=2%, weekly_tol=2%, q=5, m=3",
                 {
                     "selected_date": latest_snapshot_date,
-                    "n_pct": 0.10,
+                    "annual_growth_pct": 0.10,
+                    "quarterly_growth_pct": 0.10,
                     "annual_years": 3,
                     "quarter_count": 4,
+                    "daily_ma_lower_bound": 0.98,
+                    "daily_ma_upper_bound": 1.02,
+                    "weekly_ma_lower_bound": 0.98,
+                    "weekly_ma_upper_bound": 1.02,
                     "q": 5,
                     "m": 3,
                     "universe_filter": True,
@@ -291,12 +322,17 @@ def main() -> None:
             )
             run_sample_query(
                 cur,
-                "Relaxed n=5%, annual=2, quarterly=2, q=3, m=2",
+                "Relaxed growth=5%, annual=2, quarterly=2, daily_tol=5%, weekly_tol=5%, q=3, m=2",
                 {
                     "selected_date": latest_snapshot_date,
-                    "n_pct": 0.05,
+                    "annual_growth_pct": 0.05,
+                    "quarterly_growth_pct": 0.05,
                     "annual_years": 2,
                     "quarter_count": 2,
+                    "daily_ma_lower_bound": 0.95,
+                    "daily_ma_upper_bound": 1.05,
+                    "weekly_ma_lower_bound": 0.95,
+                    "weekly_ma_upper_bound": 1.05,
                     "q": 3,
                     "m": 2,
                     "universe_filter": True,
