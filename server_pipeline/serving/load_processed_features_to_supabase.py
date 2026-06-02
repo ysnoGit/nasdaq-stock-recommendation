@@ -157,7 +157,41 @@ def table_count(conn, table: str) -> int:
         return int(cur.fetchone()[0])
 
 
+def table_exists(conn, table: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)", (table,))
+        return cur.fetchone()[0] is not None
+
+
+def require_tables(conn, tables: list[str]) -> None:
+    missing = [table for table in tables if not table_exists(conn, table)]
+    if missing:
+        raise RuntimeError(
+            "Missing Supabase serving table(s): "
+            f"{', '.join(missing)}. Run:\n"
+            "bash scripts/load_processed_features_to_supabase.sh --apply-schema"
+        )
+
+
+def required_tables_for_load(only: str | None) -> list[str]:
+    if only == "security":
+        return ["security_master", "security_feature_snapshot"]
+    if only == "security-master":
+        return ["security_master"]
+    if only == "annual":
+        return ["annual_growth_history"]
+    if only == "quarterly":
+        return ["quarterly_growth_history"]
+    return [
+        "security_master",
+        "security_feature_snapshot",
+        "annual_growth_history",
+        "quarterly_growth_history",
+    ]
+
+
 def deactivate_security_master(conn) -> None:
+    require_tables(conn, ["security_master"])
     with conn.cursor() as cur:
         cur.execute("UPDATE security_master SET is_active = false, updated_at = now()")
 
@@ -366,6 +400,124 @@ def build_security_master_rows(daily: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def build_daily_f_confirmation(daily: pd.DataFrame) -> pd.DataFrame:
+    confirmation = (
+        daily[["gvkey", "iid", "snapshot_date", "flag_f"]]
+        .copy()
+        .sort_values(["gvkey", "iid", "snapshot_date"])
+    )
+    grouped = confirmation.groupby(["gvkey", "iid"], dropna=False)
+    confirmation["daily_f_confirmed_using_date"] = grouped["snapshot_date"].shift(-1)
+    confirmation["daily_f_confirmation_pass"] = grouped["flag_f"].shift(-1)
+
+    has_future_row = (
+        confirmation["daily_f_confirmed_using_date"].notna()
+        & (confirmation["daily_f_confirmed_using_date"] > confirmation["snapshot_date"])
+    )
+    confirmation["daily_f_confirmation_pass"] = (
+        confirmation["daily_f_confirmation_pass"].where(has_future_row, pd.NA).astype(object)
+    )
+    confirmation["daily_f_confirmed_using_date"] = (
+        confirmation["daily_f_confirmed_using_date"].where(has_future_row, pd.NA)
+    )
+
+    return confirmation[
+        [
+            "gvkey",
+            "iid",
+            "snapshot_date",
+            "daily_f_confirmation_pass",
+            "daily_f_confirmed_using_date",
+        ]
+    ]
+
+
+def build_weekly_h_confirmation(daily: pd.DataFrame, weekly: pd.DataFrame) -> pd.DataFrame:
+    daily_keys = daily[["gvkey", "iid", "snapshot_date"]].drop_duplicates().copy()
+    daily_keys["weekly_h_confirmation_pass"] = pd.NA
+    daily_keys["weekly_h_confirmed_using_date"] = pd.NA
+
+    weekly_confirmation = (
+        weekly[["gvkey", "iid", "week_end_date", "flag_h"]]
+        .dropna(subset=["week_end_date"])
+        .copy()
+        .sort_values(["gvkey", "iid", "week_end_date"])
+    )
+    weekly_by_security = {
+        key: group.reset_index(drop=True)
+        for key, group in weekly_confirmation.groupby(["gvkey", "iid"], dropna=False)
+    }
+
+    for key, daily_group in daily_keys.groupby(["gvkey", "iid"], dropna=False):
+        weekly_group = weekly_by_security.get(key)
+        if weekly_group is None or weekly_group.empty:
+            continue
+
+        weekly_dates = pd.to_datetime(weekly_group["week_end_date"]).to_numpy()
+        daily_dates = pd.to_datetime(daily_group["snapshot_date"]).to_numpy()
+        next_indexes = np.searchsorted(weekly_dates, daily_dates, side="right")
+        has_future_week = next_indexes < len(weekly_group)
+
+        if not has_future_week.any():
+            continue
+
+        target_index = daily_group.index[has_future_week]
+        future_weekly_rows = weekly_group.iloc[next_indexes[has_future_week]]
+        daily_keys.loc[target_index, "weekly_h_confirmation_pass"] = (
+            future_weekly_rows["flag_h"].astype(object).to_numpy()
+        )
+        daily_keys.loc[target_index, "weekly_h_confirmed_using_date"] = (
+            future_weekly_rows["week_end_date"].to_numpy()
+        )
+
+    return daily_keys
+
+
+def validate_confirmation_fields(df: pd.DataFrame) -> None:
+    checks = {
+        "bad_f_rows": (
+            df["daily_f_confirmed_using_date"].notna()
+            & (df["daily_f_confirmed_using_date"] <= df["snapshot_date"])
+        ),
+        "bad_h_rows": (
+            df["weekly_h_confirmed_using_date"].notna()
+            & (df["weekly_h_confirmed_using_date"] <= df["snapshot_date"])
+        ),
+        "bad_f_null_consistency_rows": (
+            df["daily_f_confirmed_using_date"].isna()
+            & df["daily_f_confirmation_pass"].notna()
+        ),
+        "bad_h_null_consistency_rows": (
+            df["weekly_h_confirmed_using_date"].isna()
+            & df["weekly_h_confirmation_pass"].notna()
+        ),
+        "bad_f_evaluated_consistency_rows": (
+            df["daily_f_confirmed_using_date"].notna()
+            & df["daily_f_confirmation_pass"].isna()
+        ),
+        "bad_h_evaluated_consistency_rows": (
+            df["weekly_h_confirmed_using_date"].notna()
+            & df["weekly_h_confirmation_pass"].isna()
+        ),
+    }
+    failures = {name: int(mask.sum()) for name, mask in checks.items() if int(mask.sum())}
+    if failures:
+        formatted = ", ".join(f"{name}={count:,}" for name, count in failures.items())
+        raise RuntimeError(f"F/H confirmation validation failed: {formatted}")
+
+    print("F/H confirmation validation passed.")
+    print(
+        "Daily F evaluated rows: "
+        f"{df['daily_f_confirmed_using_date'].notna().sum():,}; "
+        f"null rows: {df['daily_f_confirmed_using_date'].isna().sum():,}"
+    )
+    print(
+        "Weekly H evaluated rows: "
+        f"{df['weekly_h_confirmed_using_date'].notna().sum():,}; "
+        f"null rows: {df['weekly_h_confirmed_using_date'].isna().sum():,}"
+    )
+
+
 def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     daily_paths = latest_daily_window(list_daily_metric_paths(), lookback_months)
     daily = read_many_parquet(daily_paths)
@@ -466,6 +618,18 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
         how="left",
         suffixes=("", "_weekly"),
     )
+    daily_f_confirmation = build_daily_f_confirmation(daily)
+    weekly_h_confirmation = build_weekly_h_confirmation(daily, weekly_subset)
+    merged = merged.merge(
+        daily_f_confirmation,
+        on=["gvkey", "iid", "snapshot_date"],
+        how="left",
+    )
+    merged = merged.merge(
+        weekly_h_confirmation,
+        on=["gvkey", "iid", "snapshot_date"],
+        how="left",
+    )
 
     now = datetime.now(timezone.utc)
     out = pd.DataFrame(
@@ -489,10 +653,10 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
             "wma5": merged["wma5"],
             "wma10": merged["wma10"],
             "wma30": merged["wma30"],
-            "daily_f_confirmation_pass": merged["flag_f"],
-            "daily_f_confirmed_using_date": merged["snapshot_date"],
-            "weekly_h_confirmation_pass": merged["flag_h"],
-            "weekly_h_confirmed_using_date": merged["week_end_date"],
+            "daily_f_confirmation_pass": merged["daily_f_confirmation_pass"],
+            "daily_f_confirmed_using_date": merged["daily_f_confirmed_using_date"],
+            "weekly_h_confirmation_pass": merged["weekly_h_confirmation_pass"],
+            "weekly_h_confirmed_using_date": merged["weekly_h_confirmed_using_date"],
             "source_s3_path": merged["source_s3_path"],
             "updated_at": now,
         }
@@ -504,6 +668,8 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
             "security_feature_snapshot build produced duplicate primary keys: "
             f"{duplicates:,}"
         )
+
+    validate_confirmation_fields(out)
 
     print(f"Security feature snapshot rows built: {len(out):,}")
     print(f"Security feature snapshot date range: {out['snapshot_date'].min()} to {out['snapshot_date'].max()}")
@@ -590,6 +756,9 @@ def main() -> None:
         if args.apply_schema:
             print("Applying Supabase serving schema...")
             apply_schema(conn)
+
+        required_tables = required_tables_for_load(args.only)
+        require_tables(conn, required_tables)
 
         with conn.transaction():
             if args.only in (None, "security", "security-master"):

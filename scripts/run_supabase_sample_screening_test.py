@@ -47,6 +47,77 @@ def require_tables(cur, tables: list[str]) -> None:
         )
 
 
+def validate_confirmation_fields(cur) -> None:
+    checks = [
+        (
+            "bad_f_rows",
+            """
+            SELECT COUNT(*)
+            FROM security_feature_snapshot
+            WHERE daily_f_confirmed_using_date IS NOT NULL
+              AND daily_f_confirmed_using_date <= snapshot_date
+            """,
+        ),
+        (
+            "bad_h_rows",
+            """
+            SELECT COUNT(*)
+            FROM security_feature_snapshot
+            WHERE weekly_h_confirmed_using_date IS NOT NULL
+              AND weekly_h_confirmed_using_date <= snapshot_date
+            """,
+        ),
+        (
+            "bad_f_null_consistency_rows",
+            """
+            SELECT COUNT(*)
+            FROM security_feature_snapshot
+            WHERE daily_f_confirmed_using_date IS NULL
+              AND daily_f_confirmation_pass IS NOT NULL
+            """,
+        ),
+        (
+            "bad_h_null_consistency_rows",
+            """
+            SELECT COUNT(*)
+            FROM security_feature_snapshot
+            WHERE weekly_h_confirmed_using_date IS NULL
+              AND weekly_h_confirmation_pass IS NOT NULL
+            """,
+        ),
+        (
+            "bad_f_evaluated_consistency_rows",
+            """
+            SELECT COUNT(*)
+            FROM security_feature_snapshot
+            WHERE daily_f_confirmed_using_date IS NOT NULL
+              AND daily_f_confirmation_pass IS NULL
+            """,
+        ),
+        (
+            "bad_h_evaluated_consistency_rows",
+            """
+            SELECT COUNT(*)
+            FROM security_feature_snapshot
+            WHERE weekly_h_confirmed_using_date IS NOT NULL
+              AND weekly_h_confirmation_pass IS NULL
+            """,
+        ),
+    ]
+
+    failures = {}
+    print("\nF/H confirmation validation:")
+    for label, sql in checks:
+        count = int(scalar(cur, sql))
+        print(f"{label}: {count:,}")
+        if count:
+            failures[label] = count
+
+    if failures:
+        formatted = ", ".join(f"{label}={count:,}" for label, count in failures.items())
+        raise RuntimeError(f"F/H confirmation validation failed: {formatted}")
+
+
 def run_sample_query(cur, label: str, params: dict[str, Any]) -> None:
     query = """
     WITH selected_snapshot AS (
@@ -185,6 +256,8 @@ def main() -> None:
             print(f"Latest snapshot master join: {joined_master_rows:,}/{latest_rows:,}")
             if joined_master_rows < latest_rows:
                 raise RuntimeError("Latest snapshot rows do not all join to security_master.")
+
+            validate_confirmation_fields(cur)
 
             dynamic_d_count = scalar(cur, """
                 WITH recent_volume AS (

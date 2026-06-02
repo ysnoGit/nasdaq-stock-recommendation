@@ -102,6 +102,16 @@ Conditions A-H should be evaluated dynamically:
 | G | `security_feature_snapshot.wma5`, `wma10`, `wma30`. |
 | H | `security_feature_snapshot.weekly_h_confirmation_pass`. |
 
+Stored F/H confirmation fields preserve future-data semantics:
+
+- `daily_f_confirmation_pass = true/false` only when a next trading row exists for the same `gvkey, iid`.
+- `daily_f_confirmed_using_date` must be greater than `snapshot_date`.
+- `weekly_h_confirmation_pass = true/false` only when a future weekly confirmation row exists for the same `gvkey, iid`.
+- `weekly_h_confirmed_using_date` must be greater than `snapshot_date`.
+- `NULL` means the future confirmation row does not exist yet, not that the condition failed.
+
+Screening queries may use `COALESCE(..., false)` at query time, but the stored table should keep `NULL` so the app can distinguish “failed” from “not confirmable yet.”
+
 Condition D:
 
 ```sql
@@ -170,6 +180,60 @@ left join security_master as sm
   on s.gvkey = sm.gvkey
  and s.iid = sm.iid
 where s.snapshot_date = l.snapshot_date;
+```
+
+F/H confirmation checks:
+
+```sql
+select count(*) as bad_f_rows
+from security_feature_snapshot
+where daily_f_confirmed_using_date is not null
+  and daily_f_confirmed_using_date <= snapshot_date;
+
+select count(*) as bad_h_rows
+from security_feature_snapshot
+where weekly_h_confirmed_using_date is not null
+  and weekly_h_confirmed_using_date <= snapshot_date;
+
+select count(*) as bad_f_null_consistency_rows
+from security_feature_snapshot
+where daily_f_confirmed_using_date is null
+  and daily_f_confirmation_pass is not null;
+
+select count(*) as bad_h_null_consistency_rows
+from security_feature_snapshot
+where weekly_h_confirmed_using_date is null
+  and weekly_h_confirmation_pass is not null;
+
+select count(*) as bad_f_evaluated_consistency_rows
+from security_feature_snapshot
+where daily_f_confirmed_using_date is not null
+  and daily_f_confirmation_pass is null;
+
+select count(*) as bad_h_evaluated_consistency_rows
+from security_feature_snapshot
+where weekly_h_confirmed_using_date is not null
+  and weekly_h_confirmation_pass is null;
+```
+
+Date-level F/H diagnostic:
+
+```sql
+select
+    snapshot_date,
+    count(*) as rows,
+    count(*) filter (where daily_f_confirmation_pass is true) as f_true_rows,
+    count(*) filter (where daily_f_confirmation_pass is false) as f_false_rows,
+    count(*) filter (where daily_f_confirmation_pass is null) as f_null_rows,
+    count(*) filter (where daily_f_confirmed_using_date > snapshot_date) as f_future_confirmed_rows,
+    count(*) filter (where weekly_h_confirmation_pass is true) as h_true_rows,
+    count(*) filter (where weekly_h_confirmation_pass is false) as h_false_rows,
+    count(*) filter (where weekly_h_confirmation_pass is null) as h_null_rows,
+    count(*) filter (where weekly_h_confirmed_using_date > snapshot_date) as h_future_confirmed_rows
+from security_feature_snapshot
+group by snapshot_date
+order by snapshot_date desc
+limit 20;
 ```
 
 ## Sample Screening Test
