@@ -703,6 +703,28 @@ def load_table(
         )
 
 
+def delete_security_feature_snapshot_window(conn, security_df: pd.DataFrame) -> None:
+    start_date = security_df["snapshot_date"].min()
+    end_date = security_df["snapshot_date"].max()
+    prepared_keys = security_df[["snapshot_date", "gvkey", "iid"]].drop_duplicates().shape[0]
+
+    print("\nReplacing security_feature_snapshot date window before load")
+    print(f"Snapshot date window: {start_date} to {end_date}")
+    print(f"Prepared snapshot keys in window: {prepared_keys:,}")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM security_feature_snapshot
+            WHERE snapshot_date BETWEEN %s AND %s
+            """,
+            (start_date, end_date),
+        )
+        deleted_rows = cur.rowcount
+
+    print(f"Deleted existing security_feature_snapshot rows in window: {deleted_rows:,}")
+
+
 def validate_security_master_active_count(conn, security_df: pd.DataFrame) -> None:
     latest_snapshot_date = security_df["snapshot_date"].max()
     latest_snapshot_count = (
@@ -789,6 +811,7 @@ def main() -> None:
                 )
 
             if args.only in (None, "security"):
+                delete_security_feature_snapshot_window(conn, security_df)
                 load_table(
                     conn,
                     "security_feature_snapshot",
