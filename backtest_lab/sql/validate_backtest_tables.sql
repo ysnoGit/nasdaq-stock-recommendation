@@ -97,7 +97,7 @@ ORDER BY parameter_set_id, screen_type;
 SELECT
     e.parameter_set_id,
     e.screen_type,
-    COUNT(*) AS selected_events,
+    COUNT(DISTINCT e.selection_event_id) AS selected_events,
     COUNT(f.price_flow_id) AS price_flow_rows,
     MIN(f.period_start_date) AS first_flow_start,
     MAX(f.period_end_date) AS last_flow_end
