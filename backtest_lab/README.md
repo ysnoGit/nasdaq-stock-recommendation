@@ -41,23 +41,35 @@ source venv/bin/activate
 export AWS_REGION="ap-northeast-2"
 export AWS_DEFAULT_REGION="ap-northeast-2"
 
-bash backtest_lab/scripts/apply_backtest_schema.sh
+Recommended storage-light run:
+
+```bash
+bash backtest_lab/scripts/run_backtest_pipeline.sh --start-date 2022-01-01
+```
+
+This computes historical daily/weekly features locally with S3/DuckDB and loads only final selections, price-flow summaries, and 16 result tables into Supabase.
+
+The older table-loader scripts are still present for debugging, but do not use them for the full 2022+ backtest unless the Supabase database has enough storage for millions of feature rows:
+
+```bash
+export BACKTEST_ALLOW_SUPABASE_FEATURE_LOAD=true
 bash backtest_lab/scripts/prepare_backtest_data.sh --start-date 2022-01-01
 bash backtest_lab/scripts/run_backtest_selection.sh
-bash backtest_lab/scripts/validate_backtest_data.sh
 ```
 
 `SUPABASE_DB_URL` must be set in the environment before running these scripts. Do not paste or commit the value.
 
+The full 2022+ daily feature table is large. If Supabase reports `No space left on device`, the database storage quota is exhausted before selection starts; reduce the backtest date window or increase Supabase database storage before rerunning.
+
 ## What Gets Rebuilt
 
-`prepare_backtest_data.sh` rebuilds:
+The recommended `run_backtest_pipeline.sh` rebuilds these locally and does not store them in Supabase:
 
 - daily features from existing raw S3 daily Parquet files
 - security master from the daily feature identity columns
 - weekly features from the rebuilt daily features
 
-The daily and weekly backtest table windows are replaced before load. Production tables are not deleted.
+Only final backtest outputs are stored in Supabase. The `backtest_daily_feature_snapshot` and `backtest_weekly_feature_snapshot` tables may remain empty in this workflow. Production tables are not deleted.
 
 ## Selection Behavior
 

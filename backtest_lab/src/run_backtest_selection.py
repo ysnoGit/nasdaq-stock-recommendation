@@ -301,6 +301,15 @@ def main() -> None:
                 "quarterly_growth_history",
             ],
         )
+        daily_count = table_count(conn, "backtest_daily_feature_snapshot")
+        weekly_count = table_count(conn, "backtest_weekly_feature_snapshot")
+        if daily_count == 0 or weekly_count == 0:
+            raise RuntimeError(
+                "Backtest feature tables are empty. "
+                "Run `bash backtest_lab/scripts/prepare_backtest_data.sh --start-date 2022-01-01` "
+                "successfully before running selection. "
+                f"Current counts: daily={daily_count:,}, weekly={weekly_count:,}"
+            )
         before = table_count(conn, "backtest_selection_event")
         with conn.transaction():
             with conn.cursor() as cur:

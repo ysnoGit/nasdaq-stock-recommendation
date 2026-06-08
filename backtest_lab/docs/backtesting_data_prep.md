@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This folder creates a temporary Supabase backtesting dataset without changing production serving tables.
+This folder creates a temporary backtesting dataset without changing production serving tables.
 
 The backtest starts at `2022-01-01` by default and reads existing S3 daily raw Parquet files under:
 
@@ -12,9 +12,11 @@ s3://nasdaq-stock-recommendation/raw/compustat_daily_security/
 
 It does not extract from WRDS.
 
+The recommended workflow computes historical features locally with S3/DuckDB and stores only final selections, price-flow summaries, and materialized result tables in Supabase. This avoids loading millions of historical daily/weekly feature rows into Supabase.
+
 ## Feature Build
 
-Daily features are rebuilt from raw daily data with a warm-up window so moving averages are available at the start of the backtest window.
+Daily features are rebuilt locally from raw daily data with a warm-up window so moving averages are available at the start of the backtest window.
 
 Daily fields include:
 
@@ -25,7 +27,7 @@ Daily fields include:
 - MA20, MA50, MA100
 - next daily MA/price values for condition F
 
-Weekly features are built from completed official U.S. trading weeks only.
+Weekly features are built locally from completed official U.S. trading weeks only.
 
 Weekly fields include:
 
@@ -64,7 +66,7 @@ The fixed values are:
 
 `A_H` is evaluated only on completed weekly dates where the daily snapshot date equals the weekly end date and the same `gvkey/iid` exists in both tables.
 
-`backtest_selection_event` remains the canonical table with `parameter_set_id`. After selection and price-flow generation, 16 physical result tables are materialized from it. Their names encode the parameter combination, for example `backtest_result_ag3_qg5_vr10_vd3`.
+`backtest_selection_event` remains the canonical Supabase table with `parameter_set_id`. After selection and price-flow generation, 16 physical result tables are materialized from it. Their names encode the parameter combination, for example `backtest_result_ag3_qg5_vr10_vd3`.
 
 ## Validation
 
@@ -77,7 +79,7 @@ bash backtest_lab/scripts/validate_backtest_data.sh
 The validation SQL reports:
 
 - row counts for all backtest tables
-- daily and weekly date ranges
+- daily and weekly Supabase feature row counts, which can be zero in the storage-light workflow
 - duplicate daily and weekly keys
 - multiple weekly partitions for one calendar week
 - selected event counts by parameter set and screen type

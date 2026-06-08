@@ -140,6 +140,14 @@ def main() -> None:
                 "backtest_price_flow_3m",
             ],
         )
+        selection_count = table_count(conn, "backtest_selection_event")
+        daily_count = table_count(conn, "backtest_daily_feature_snapshot")
+        if selection_count == 0 or daily_count == 0:
+            raise RuntimeError(
+                "Backtest selection or daily feature tables are empty. "
+                "Run feature prep and selection successfully before generating price flows. "
+                f"Current counts: selections={selection_count:,}, daily={daily_count:,}"
+            )
         before = table_count(conn, "backtest_price_flow_3m")
         with conn.transaction():
             with conn.cursor() as cur:

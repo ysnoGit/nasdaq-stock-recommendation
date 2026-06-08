@@ -88,6 +88,28 @@ DATE_INDEX_SQL = "CREATE INDEX {result_table_name}_date_idx ON {result_table_nam
 SECURITY_INDEX_SQL = "CREATE INDEX {result_table_name}_security_idx ON {result_table_name} (gvkey, iid)"
 
 
+def materialize_result_tables(conn, parameter_set_names: list[str]) -> None:
+    require_tables(
+        conn,
+        [
+            "backtest_parameter_set",
+            "backtest_selection_event",
+            "backtest_price_flow_3m",
+        ],
+    )
+    with conn.cursor() as cur:
+        for parameter_set_name in parameter_set_names:
+            result_table_name = result_table_for_parameter_set(parameter_set_name)
+            print(f"Materializing {result_table_name}...")
+            cur.execute(f"DROP TABLE IF EXISTS {result_table_name}")
+            cur.execute(
+                CREATE_TABLE_SQL.format(result_table_name=result_table_name),
+                {"parameter_set_name": parameter_set_name},
+            )
+            cur.execute(DATE_INDEX_SQL.format(result_table_name=result_table_name))
+            cur.execute(SECURITY_INDEX_SQL.format(result_table_name=result_table_name))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Materialize one physical result table for each backtest parameter combination."
@@ -104,26 +126,8 @@ def main() -> None:
     )
 
     with connect_supabase() as conn:
-        require_tables(
-            conn,
-            [
-                "backtest_parameter_set",
-                "backtest_selection_event",
-                "backtest_price_flow_3m",
-            ],
-        )
         with conn.transaction():
-            with conn.cursor() as cur:
-                for parameter_set_name in parameter_set_names:
-                    result_table_name = result_table_for_parameter_set(parameter_set_name)
-                    print(f"Materializing {result_table_name}...")
-                    cur.execute(f"DROP TABLE IF EXISTS {result_table_name}")
-                    cur.execute(
-                        CREATE_TABLE_SQL.format(result_table_name=result_table_name),
-                        {"parameter_set_name": parameter_set_name},
-                    )
-                    cur.execute(DATE_INDEX_SQL.format(result_table_name=result_table_name))
-                    cur.execute(SECURITY_INDEX_SQL.format(result_table_name=result_table_name))
+            materialize_result_tables(conn, parameter_set_names)
 
     print(f"Backtest result tables materialized: {len(parameter_set_names):,}")
 
