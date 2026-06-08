@@ -30,6 +30,8 @@ Everything in this folder is intentionally isolated from the production pipeline
 
 The full grid is `2 x 2 x 2 x 2 = 16` combinations. Each combination gets one physical result table after `run_backtest_selection.sh`.
 
+Growth choices are stored as user-facing percentages. The selection logic converts `3` to `0.03` and `5` to `0.05` before comparing them with the decimal growth ratios stored in the growth-history files.
+
 ## EC2 Run Sequence
 
 From the repo root on EC2:

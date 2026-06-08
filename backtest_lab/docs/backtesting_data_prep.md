@@ -62,6 +62,8 @@ The fixed values are:
 - `daily_ma_tolerance_pct`: `1`
 - `weekly_ma_tolerance_pct`: `2`
 
+Annual and quarterly growth-history values are decimal ratios. The backtest converts the user-facing percentage choices before comparison, so `3` means `0.03` and `5` means `0.05`.
+
 `A_F` is evaluated on daily dates from 2022 onward.
 
 `A_H` is evaluated only on completed weekly dates where the daily snapshot date equals the weekly end date and the same `gvkey/iid` exists in both tables.

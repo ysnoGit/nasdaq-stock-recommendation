@@ -73,8 +73,8 @@ daily_flags AS (
         SELECT
             COUNT(*)::integer AS valid_count,
             COUNT(*) FILTER (
-                WHERE annual_revenue_growth >= p.annual_growth_pct
-                  AND annual_operating_income_growth >= p.annual_growth_pct
+                WHERE annual_revenue_growth >= p.annual_growth_pct / 100.0
+                  AND annual_operating_income_growth >= p.annual_growth_pct / 100.0
             )::integer AS pass_count
         FROM (
             SELECT annual_revenue_growth, annual_operating_income_growth
@@ -96,8 +96,8 @@ daily_flags AS (
         SELECT
             COUNT(*)::integer AS valid_count,
             COUNT(*) FILTER (
-                WHERE quarterly_revenue_growth >= p.quarterly_growth_pct
-                  AND quarterly_operating_income_growth >= p.quarterly_growth_pct
+                WHERE quarterly_revenue_growth >= p.quarterly_growth_pct / 100.0
+                  AND quarterly_operating_income_growth >= p.quarterly_growth_pct / 100.0
             )::integer AS pass_count
         FROM (
             SELECT quarterly_revenue_growth, quarterly_operating_income_growth
