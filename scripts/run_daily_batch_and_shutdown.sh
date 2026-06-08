@@ -130,7 +130,8 @@ import psycopg
 
 tables = [
     "security_master",
-    "security_feature_snapshot",
+    "security_daily_feature_snapshot",
+    "security_weekly_feature_snapshot",
     "annual_growth_history",
     "quarterly_growth_history",
 ]
@@ -146,24 +147,36 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"]) as conn:
                 MIN(snapshot_date) AS min_snapshot_date,
                 MAX(snapshot_date) AS max_snapshot_date,
                 COUNT(*) AS row_count,
-                COUNT(*) FILTER (WHERE volume_ratio IS NOT NULL) AS volume_ratio_rows,
-                COUNT(*) FILTER (WHERE weekly_close_price IS NOT NULL) AS weekly_matched_rows
-            FROM security_feature_snapshot
+                COUNT(*) FILTER (WHERE volume_ratio IS NOT NULL) AS volume_ratio_rows
+            FROM security_daily_feature_snapshot
         """)
-        min_date, max_date, row_count, volume_rows, weekly_rows = cur.fetchone()
+        min_date, max_date, row_count, volume_rows = cur.fetchone()
         print(
-            "security_feature_snapshot coverage: "
+            "security_daily_feature_snapshot coverage: "
             f"{min_date} to {max_date}; rows={row_count:,}; "
-            f"volume_ratio_rows={volume_rows:,}; weekly_matched_rows={weekly_rows:,}"
+            f"volume_ratio_rows={volume_rows:,}"
+        )
+
+        cur.execute("""
+            SELECT
+                MIN(week_end_date) AS min_week_end_date,
+                MAX(week_end_date) AS max_week_end_date,
+                COUNT(*) AS row_count
+            FROM security_weekly_feature_snapshot
+        """)
+        min_week, max_week, weekly_row_count = cur.fetchone()
+        print(
+            "security_weekly_feature_snapshot coverage: "
+            f"{min_week} to {max_week}; rows={weekly_row_count:,}"
         )
 
         cur.execute("""
             SELECT
                 COUNT(DISTINCT snapshot_date) AS distinct_snapshot_dates,
                 MAX(snapshot_date) - MIN(snapshot_date) AS covered_days
-            FROM security_feature_snapshot
+            FROM security_daily_feature_snapshot
             WHERE snapshot_date >= (
-                (SELECT MAX(snapshot_date) FROM security_feature_snapshot)
+                (SELECT MAX(snapshot_date) FROM security_daily_feature_snapshot)
                 - INTERVAL '3 months'
             )
         """)
@@ -174,17 +187,17 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"]) as conn:
         )
 
         if distinct_dates == 0:
-            raise RuntimeError("security_feature_snapshot has no rows for dynamic Condition D.")
+            raise RuntimeError("security_daily_feature_snapshot has no rows for dynamic Condition D.")
 
         cur.execute("""
             WITH latest AS (
                 SELECT MAX(snapshot_date) AS snapshot_date
-                FROM security_feature_snapshot
+                FROM security_daily_feature_snapshot
             )
             SELECT
                 COUNT(*) AS latest_rows,
                 COUNT(sm.gvkey) AS joined_master_rows
-            FROM security_feature_snapshot AS s
+            FROM security_daily_feature_snapshot AS s
             CROSS JOIN latest AS l
             LEFT JOIN security_master AS sm
               ON s.gvkey = sm.gvkey

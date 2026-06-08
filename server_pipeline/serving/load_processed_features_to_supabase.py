@@ -22,6 +22,7 @@ from server_pipeline.config import (  # noqa: E402
     QUARTERLY_GROWTH_HISTORY_PREFIX,
     WEEKLY_MARKET_METRICS_PREFIX,
 )
+from server_pipeline.utils.trading_calendar import official_week_end_trading_date  # noqa: E402
 from server_pipeline.utils.universe_filter import add_universe_filter_columns  # noqa: E402
 
 
@@ -175,16 +176,25 @@ def require_tables(conn, tables: list[str]) -> None:
 
 def required_tables_for_load(only: str | None) -> list[str]:
     if only == "security":
-        return ["security_master", "security_feature_snapshot"]
+        return [
+            "security_master",
+            "security_daily_feature_snapshot",
+            "security_weekly_feature_snapshot",
+        ]
     if only == "security-master":
         return ["security_master"]
+    if only == "daily":
+        return ["security_daily_feature_snapshot"]
+    if only == "weekly":
+        return ["security_weekly_feature_snapshot"]
     if only == "annual":
         return ["annual_growth_history"]
     if only == "quarterly":
         return ["quarterly_growth_history"]
     return [
         "security_master",
-        "security_feature_snapshot",
+        "security_daily_feature_snapshot",
+        "security_weekly_feature_snapshot",
         "annual_growth_history",
         "quarterly_growth_history",
     ]
@@ -249,7 +259,7 @@ def latest_daily_window(paths: list[dict[str, Any]], lookback_months: int) -> li
     selected = [item for item in paths if cutoff <= item["date_value"] <= latest_date]
 
     if not selected:
-        raise RuntimeError("No daily metric partitions selected for security_feature_snapshot.")
+        raise RuntimeError("No daily metric partitions selected for security_daily_feature_snapshot.")
 
     print(f"Daily metric latest date: {latest_date}")
     print(f"Daily metric lookback start: {cutoff}")
@@ -457,78 +467,64 @@ def build_daily_f_confirmation(daily: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
-def build_weekly_h_confirmation(daily: pd.DataFrame, weekly: pd.DataFrame) -> pd.DataFrame:
-    daily_keys = daily[["gvkey", "iid", "snapshot_date"]].drop_duplicates().copy()
-    daily_keys["weekly_h_confirmed_using_date"] = pd.NA
-    daily_keys["future_weekly_wma5"] = pd.NA
-    daily_keys["future_weekly_wma10"] = pd.NA
-    daily_keys["future_weekly_wma30"] = pd.NA
-    daily_keys["future_weekly_close_price"] = pd.NA
-
-    weekly_confirmation = (
+def build_weekly_h_confirmation(weekly: pd.DataFrame) -> pd.DataFrame:
+    confirmation = (
         weekly[
             [
                 "gvkey",
                 "iid",
                 "week_end_date",
                 "weekly_close_price",
-                "wma5",
-                "wma10",
-                "wma30",
+                "weekly_ma5",
+                "weekly_ma10",
+                "weekly_ma30",
             ]
         ]
-        .dropna(subset=["week_end_date"])
         .copy()
         .sort_values(["gvkey", "iid", "week_end_date"])
     )
-    weekly_by_security = {
-        key: group.reset_index(drop=True)
-        for key, group in weekly_confirmation.groupby(["gvkey", "iid"], dropna=False)
-    }
+    grouped = confirmation.groupby(["gvkey", "iid"], dropna=False)
+    confirmation["weekly_h_confirmed_using_date"] = grouped["week_end_date"].shift(-1)
+    confirmation["future_weekly_close_price"] = grouped["weekly_close_price"].shift(-1)
+    confirmation["future_weekly_ma5"] = grouped["weekly_ma5"].shift(-1)
+    confirmation["future_weekly_ma10"] = grouped["weekly_ma10"].shift(-1)
+    confirmation["future_weekly_ma30"] = grouped["weekly_ma30"].shift(-1)
 
-    for key, daily_group in daily_keys.groupby(["gvkey", "iid"], dropna=False):
-        weekly_group = weekly_by_security.get(key)
-        if weekly_group is None or weekly_group.empty:
-            continue
+    has_future_row = (
+        confirmation["weekly_h_confirmed_using_date"].notna()
+        & (confirmation["weekly_h_confirmed_using_date"] > confirmation["week_end_date"])
+    )
+    future_columns = [
+        "future_weekly_close_price",
+        "future_weekly_ma5",
+        "future_weekly_ma10",
+        "future_weekly_ma30",
+    ]
+    confirmation["weekly_h_confirmed_using_date"] = (
+        confirmation["weekly_h_confirmed_using_date"].where(has_future_row, pd.NA)
+    )
+    for column in future_columns:
+        confirmation[column] = confirmation[column].where(has_future_row, pd.NA)
 
-        weekly_dates = pd.to_datetime(weekly_group["week_end_date"]).to_numpy()
-        daily_dates = pd.to_datetime(daily_group["snapshot_date"]).to_numpy()
-        next_indexes = np.searchsorted(weekly_dates, daily_dates, side="right")
-        has_future_week = next_indexes < len(weekly_group)
-
-        if not has_future_week.any():
-            continue
-
-        target_index = daily_group.index[has_future_week]
-        future_weekly_rows = weekly_group.iloc[next_indexes[has_future_week]]
-        daily_keys.loc[target_index, "weekly_h_confirmed_using_date"] = (
-            future_weekly_rows["week_end_date"].to_numpy()
-        )
-        daily_keys.loc[target_index, "future_weekly_wma5"] = (
-            future_weekly_rows["wma5"].to_numpy()
-        )
-        daily_keys.loc[target_index, "future_weekly_wma10"] = (
-            future_weekly_rows["wma10"].to_numpy()
-        )
-        daily_keys.loc[target_index, "future_weekly_wma30"] = (
-            future_weekly_rows["wma30"].to_numpy()
-        )
-        daily_keys.loc[target_index, "future_weekly_close_price"] = (
-            future_weekly_rows["weekly_close_price"].to_numpy()
-        )
-
-    return daily_keys
+    return confirmation[
+        [
+            "gvkey",
+            "iid",
+            "week_end_date",
+            "weekly_h_confirmed_using_date",
+            "future_weekly_ma5",
+            "future_weekly_ma10",
+            "future_weekly_ma30",
+            "future_weekly_close_price",
+        ]
+    ]
 
 
-def validate_confirmation_fields(df: pd.DataFrame) -> None:
+def validate_daily_future_fields(df: pd.DataFrame) -> None:
     checks = {
-        "bad_f_rows": (
+        "bad_daily_future_date_rows": (
             df["daily_f_confirmed_using_date"].notna()
             & (df["daily_f_confirmed_using_date"] <= df["snapshot_date"])
-        ),
-        "bad_h_rows": (
-            df["weekly_h_confirmed_using_date"].notna()
-            & (df["weekly_h_confirmed_using_date"] <= df["snapshot_date"])
         ),
         "bad_daily_null_rows": (
             df["daily_f_confirmed_using_date"].isna()
@@ -538,26 +534,83 @@ def validate_confirmation_fields(df: pd.DataFrame) -> None:
                 | df["future_daily_ma100"].notna()
             )
         ),
+    }
+    failures = {name: int(mask.sum()) for name, mask in checks.items() if int(mask.sum())}
+    if failures:
+        formatted = ", ".join(f"{name}={count:,}" for name, count in failures.items())
+        raise RuntimeError(f"Daily future input validation failed: {formatted}")
+
+    print("Daily future input validation passed.")
+    print(
+        "Rows with future daily confirmation inputs: "
+        f"{df['daily_f_confirmed_using_date'].notna().sum():,}; "
+        f"pending rows: {df['daily_f_confirmed_using_date'].isna().sum():,}"
+    )
+
+
+def validate_weekly_future_fields(df: pd.DataFrame) -> None:
+    weekly_calendar = df[["week_start_date", "week_end_date"]].drop_duplicates().copy()
+    weekly_calendar["official_week_end_date"] = weekly_calendar["week_start_date"].map(
+        official_week_end_trading_date
+    )
+    bad_official_week_ends = weekly_calendar[
+        (weekly_calendar["official_week_end_date"].isna())
+        | (weekly_calendar["week_end_date"] != weekly_calendar["official_week_end_date"])
+    ]
+
+    weekly_keys = set(
+        df[["gvkey", "iid", "week_end_date"]].itertuples(index=False, name=None)
+    )
+    future_keys = set(
+        df[df["weekly_h_confirmed_using_date"].notna()][
+            ["gvkey", "iid", "weekly_h_confirmed_using_date"]
+        ].itertuples(index=False, name=None)
+    )
+    missing_future_keys = future_keys - weekly_keys
+
+    bad_official_week_keys = set(
+        bad_official_week_ends[["week_start_date", "week_end_date"]]
+        .itertuples(index=False, name=None)
+    )
+    bad_official_week_mask = df.apply(
+        lambda row: (row["week_start_date"], row["week_end_date"]) in bad_official_week_keys,
+        axis=1,
+    )
+    missing_future_mask = df.apply(
+        lambda row: (
+            row["gvkey"],
+            row["iid"],
+            row["weekly_h_confirmed_using_date"],
+        ) in missing_future_keys,
+        axis=1,
+    )
+
+    checks = {
+        "bad_official_week_end_rows": bad_official_week_mask,
+        "bad_missing_future_week_rows": missing_future_mask,
+        "bad_weekly_future_date_rows": (
+            df["weekly_h_confirmed_using_date"].notna()
+            & (df["weekly_h_confirmed_using_date"] <= df["week_end_date"])
+        ),
         "bad_weekly_null_rows": (
             df["weekly_h_confirmed_using_date"].isna()
             & (
-                df["future_weekly_wma5"].notna()
-                | df["future_weekly_wma10"].notna()
-                | df["future_weekly_wma30"].notna()
+                df["future_weekly_ma5"].notna()
+                | df["future_weekly_ma10"].notna()
+                | df["future_weekly_ma30"].notna()
             )
         ),
     }
     failures = {name: int(mask.sum()) for name, mask in checks.items() if int(mask.sum())}
     if failures:
         formatted = ", ".join(f"{name}={count:,}" for name, count in failures.items())
-        raise RuntimeError(f"F/H confirmation validation failed: {formatted}")
+        if not bad_official_week_ends.empty:
+            print(bad_official_week_ends.to_string(index=False))
+        if missing_future_keys:
+            print(f"Missing future weekly keys: {sorted(missing_future_keys)[:10]}")
+        raise RuntimeError(f"Weekly future input validation failed: {formatted}")
 
-    print("Future F/H input validation passed.")
-    print(
-        "Rows with future daily confirmation inputs: "
-        f"{df['daily_f_confirmed_using_date'].notna().sum():,}; "
-        f"pending rows: {df['daily_f_confirmed_using_date'].isna().sum():,}"
-    )
+    print("Weekly future input validation passed.")
     print(
         "Rows with future weekly confirmation inputs: "
         f"{df['weekly_h_confirmed_using_date'].notna().sum():,}; "
@@ -565,7 +618,7 @@ def validate_confirmation_fields(df: pd.DataFrame) -> None:
     )
 
 
-def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     daily_paths = latest_daily_window(list_daily_metric_paths(), lookback_months)
     daily = read_many_parquet(daily_paths)
     print(f"Daily metric rows selected: {len(daily):,}")
@@ -617,17 +670,61 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
         raise RuntimeError(f"Weekly metrics parquet missing expected columns: {missing_weekly}")
 
     daily["snapshot_date"] = pd.to_datetime(daily["date"]).dt.date
-    daily["week_start_date"] = (
-        pd.to_datetime(daily["snapshot_date"])
-        - pd.to_timedelta(pd.to_datetime(daily["snapshot_date"]).dt.weekday, unit="D")
-    ).dt.date
     daily["volume_lookback_end_date"] = daily["snapshot_date"]
     daily["volume_lookback_start_date"] = (
         pd.to_datetime(daily["snapshot_date"]) - pd.DateOffset(months=lookback_months)
     ).dt.date
+    daily["gvkey"] = daily["gvkey"].astype(str)
+    daily["iid"] = daily["iid"].astype(str)
+
+    master_out = build_security_master_rows(daily)
+    daily_f_confirmation = build_daily_f_confirmation(daily)
+    daily_merged = daily.merge(
+        daily_f_confirmation,
+        on=["gvkey", "iid", "snapshot_date"],
+        how="left",
+    )
 
     weekly["week_start_date"] = pd.to_datetime(weekly["week_start_date"]).dt.date
     weekly["week_end_date"] = pd.to_datetime(weekly["week_end_date"]).dt.date
+    weekly["gvkey"] = weekly["gvkey"].astype(str)
+    weekly["iid"] = weekly["iid"].astype(str)
+
+    weekly_calendar = weekly[["week_start_date", "week_end_date"]].drop_duplicates().copy()
+    weekly_calendar["official_week_end_date"] = weekly_calendar["week_start_date"].map(
+        official_week_end_trading_date
+    )
+    official_week_mask_by_row = (
+        weekly_calendar["official_week_end_date"].notna()
+        & (weekly_calendar["week_end_date"] == weekly_calendar["official_week_end_date"])
+    )
+    official_week_keys = set(
+        tuple(row)
+        for row in weekly_calendar.loc[
+            official_week_mask_by_row,
+            ["week_start_date", "week_end_date"],
+        ].itertuples(index=False, name=None)
+    )
+    completed_week_mask = weekly.apply(
+        lambda row: (row["week_start_date"], row["week_end_date"]) in official_week_keys,
+        axis=1,
+    )
+    skipped_partial_week_rows = int((~completed_week_mask).sum())
+    if skipped_partial_week_rows:
+        print(
+            "Skipping non-official or incomplete weekly metric rows before serving load: "
+            f"{skipped_partial_week_rows:,}"
+        )
+    weekly = weekly[completed_week_mask].copy()
+
+    if "weekly_open_price" not in weekly.columns:
+        weekly["weekly_open_price"] = pd.NA
+    if "weekly_high_price" not in weekly.columns:
+        weekly["weekly_high_price"] = pd.NA
+    if "weekly_low_price" not in weekly.columns:
+        weekly["weekly_low_price"] = pd.NA
+    if "weekly_volume" not in weekly.columns:
+        weekly["weekly_volume"] = pd.NA
 
     weekly_subset = weekly[
         [
@@ -635,99 +732,116 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
             "iid",
             "week_start_date",
             "week_end_date",
+            "weekly_open_price",
+            "weekly_high_price",
+            "weekly_low_price",
             "weekly_close_price",
+            "weekly_volume",
             "wma5",
             "wma10",
             "wma30",
+            "source_s3_path",
         ]
-    ].copy()
-    weekly_subset["gvkey"] = weekly_subset["gvkey"].astype(str)
-    weekly_subset["iid"] = weekly_subset["iid"].astype(str)
+    ].rename(
+        columns={
+            "wma5": "weekly_ma5",
+            "wma10": "weekly_ma10",
+            "wma30": "weekly_ma30",
+        }
+    ).copy()
 
-    weekly_duplicates = weekly_subset.duplicated(["gvkey", "iid", "week_start_date"]).sum()
+    weekly_duplicates = weekly_subset.duplicated(["week_end_date", "gvkey", "iid"]).sum()
     if weekly_duplicates:
         raise RuntimeError(
-            "Weekly metrics contain duplicate gvkey/iid/week_start_date keys, "
-            f"which would duplicate security_feature_snapshot rows: {weekly_duplicates:,}"
+            "Weekly metrics contain duplicate week_end_date/gvkey/iid keys, "
+            f"which would duplicate security_weekly_feature_snapshot rows: {weekly_duplicates:,}"
         )
 
-    daily["gvkey"] = daily["gvkey"].astype(str)
-    daily["iid"] = daily["iid"].astype(str)
-
-    master_out = build_security_master_rows(daily)
-
-    merged = daily.merge(
-        weekly_subset,
-        on=["gvkey", "iid", "week_start_date"],
-        how="left",
-        suffixes=("", "_weekly"),
-    )
-    daily_f_confirmation = build_daily_f_confirmation(daily)
-    weekly_h_confirmation = build_weekly_h_confirmation(daily, weekly_subset)
-    merged = merged.merge(
-        daily_f_confirmation,
-        on=["gvkey", "iid", "snapshot_date"],
-        how="left",
-    )
-    merged = merged.merge(
+    weekly_h_confirmation = build_weekly_h_confirmation(weekly_subset)
+    weekly_merged = weekly_subset.merge(
         weekly_h_confirmation,
-        on=["gvkey", "iid", "snapshot_date"],
+        on=["gvkey", "iid", "week_end_date"],
         how="left",
     )
 
     now = datetime.now(timezone.utc)
-    out = pd.DataFrame(
+    daily_out = pd.DataFrame(
         {
-            "snapshot_date": merged["snapshot_date"],
-            "gvkey": merged["gvkey"],
-            "iid": merged["iid"],
-            "close_price": merged["close_price_raw"],
-            "adjusted_close_price": merged["adjusted_close_price"],
-            "volume": merged["volume"],
-            "volume_ma30": merged["volume_ma30"],
-            "volume_ratio": merged["volume_ratio"],
-            "volume_lookback_start_date": merged["volume_lookback_start_date"],
-            "volume_lookback_end_date": merged["volume_lookback_end_date"],
-            "ma20": merged["ma20"],
-            "ma50": merged["ma50"],
-            "ma100": merged["ma100"],
-            "week_start_date": merged["week_start_date"],
-            "week_end_date": merged["week_end_date"],
-            "weekly_close_price": merged["weekly_close_price"],
-            "wma5": merged["wma5"],
-            "wma10": merged["wma10"],
-            "wma30": merged["wma30"],
-            "daily_f_confirmation_pass": pd.NA,
-            "daily_f_confirmed_using_date": merged["daily_f_confirmed_using_date"],
-            "future_daily_ma20": merged["future_daily_ma20"],
-            "future_daily_ma50": merged["future_daily_ma50"],
-            "future_daily_ma100": merged["future_daily_ma100"],
-            "future_daily_close_price": merged["future_daily_close_price"],
-            "future_daily_adjusted_close_price": merged["future_daily_adjusted_close_price"],
-            "weekly_h_confirmation_pass": pd.NA,
-            "weekly_h_confirmed_using_date": merged["weekly_h_confirmed_using_date"],
-            "future_weekly_wma5": merged["future_weekly_wma5"],
-            "future_weekly_wma10": merged["future_weekly_wma10"],
-            "future_weekly_wma30": merged["future_weekly_wma30"],
-            "future_weekly_close_price": merged["future_weekly_close_price"],
-            "source_s3_path": merged["source_s3_path"],
+            "snapshot_date": daily_merged["snapshot_date"],
+            "gvkey": daily_merged["gvkey"],
+            "iid": daily_merged["iid"],
+            "close_price": daily_merged["close_price_raw"],
+            "adjusted_close_price": daily_merged["adjusted_close_price"],
+            "volume": daily_merged["volume"],
+            "volume_ma30": daily_merged["volume_ma30"],
+            "volume_ratio": daily_merged["volume_ratio"],
+            "volume_lookback_start_date": daily_merged["volume_lookback_start_date"],
+            "volume_lookback_end_date": daily_merged["volume_lookback_end_date"],
+            "ma20": daily_merged["ma20"],
+            "ma50": daily_merged["ma50"],
+            "ma100": daily_merged["ma100"],
+            "daily_f_confirmed_using_date": daily_merged["daily_f_confirmed_using_date"],
+            "future_daily_ma20": daily_merged["future_daily_ma20"],
+            "future_daily_ma50": daily_merged["future_daily_ma50"],
+            "future_daily_ma100": daily_merged["future_daily_ma100"],
+            "future_daily_close_price": daily_merged["future_daily_close_price"],
+            "future_daily_adjusted_close_price": daily_merged["future_daily_adjusted_close_price"],
+            "source_s3_path": daily_merged["source_s3_path"],
             "updated_at": now,
         }
     )
 
-    duplicates = out.duplicated(["snapshot_date", "gvkey", "iid"]).sum()
+    weekly_out = pd.DataFrame(
+        {
+            "week_start_date": weekly_merged["week_start_date"],
+            "week_end_date": weekly_merged["week_end_date"],
+            "gvkey": weekly_merged["gvkey"],
+            "iid": weekly_merged["iid"],
+            "weekly_open_price": weekly_merged["weekly_open_price"],
+            "weekly_high_price": weekly_merged["weekly_high_price"],
+            "weekly_low_price": weekly_merged["weekly_low_price"],
+            "weekly_close_price": weekly_merged["weekly_close_price"],
+            "weekly_volume": weekly_merged["weekly_volume"],
+            "weekly_ma5": weekly_merged["weekly_ma5"],
+            "weekly_ma10": weekly_merged["weekly_ma10"],
+            "weekly_ma30": weekly_merged["weekly_ma30"],
+            "weekly_h_confirmed_using_date": weekly_merged["weekly_h_confirmed_using_date"],
+            "future_weekly_ma5": weekly_merged["future_weekly_ma5"],
+            "future_weekly_ma10": weekly_merged["future_weekly_ma10"],
+            "future_weekly_ma30": weekly_merged["future_weekly_ma30"],
+            "future_weekly_close_price": weekly_merged["future_weekly_close_price"],
+            "source_s3_path": weekly_merged["source_s3_path"],
+            "updated_at": now,
+        }
+    )
+
+    duplicates = daily_out.duplicated(["snapshot_date", "gvkey", "iid"]).sum()
     if duplicates:
         raise RuntimeError(
-            "security_feature_snapshot build produced duplicate primary keys: "
+            "security_daily_feature_snapshot build produced duplicate primary keys: "
             f"{duplicates:,}"
         )
+    weekly_duplicates = weekly_out.duplicated(["week_end_date", "gvkey", "iid"]).sum()
+    if weekly_duplicates:
+        raise RuntimeError(
+            "security_weekly_feature_snapshot build produced duplicate primary keys: "
+            f"{weekly_duplicates:,}"
+        )
 
-    validate_confirmation_fields(out)
+    validate_daily_future_fields(daily_out)
+    validate_weekly_future_fields(weekly_out)
 
-    print(f"Security feature snapshot rows built: {len(out):,}")
-    print(f"Security feature snapshot date range: {out['snapshot_date'].min()} to {out['snapshot_date'].max()}")
-    print(f"Rows with weekly feature match: {out['week_end_date'].notna().sum():,}")
-    return master_out, out
+    print(f"Security daily feature snapshot rows built: {len(daily_out):,}")
+    print(
+        "Security daily feature snapshot date range: "
+        f"{daily_out['snapshot_date'].min()} to {daily_out['snapshot_date'].max()}"
+    )
+    print(f"Security weekly feature snapshot rows built: {len(weekly_out):,}")
+    print(
+        "Security weekly feature snapshot week_end range: "
+        f"{weekly_out['week_end_date'].min()} to {weekly_out['week_end_date'].max()}"
+    )
+    return master_out, daily_out, weekly_out
 
 
 def load_table(
@@ -756,26 +870,48 @@ def load_table(
         )
 
 
-def delete_security_feature_snapshot_window(conn, security_df: pd.DataFrame) -> None:
-    start_date = security_df["snapshot_date"].min()
-    end_date = security_df["snapshot_date"].max()
-    prepared_keys = security_df[["snapshot_date", "gvkey", "iid"]].drop_duplicates().shape[0]
+def delete_daily_feature_snapshot_window(conn, daily_df: pd.DataFrame) -> None:
+    start_date = daily_df["snapshot_date"].min()
+    end_date = daily_df["snapshot_date"].max()
+    prepared_keys = daily_df[["snapshot_date", "gvkey", "iid"]].drop_duplicates().shape[0]
 
-    print("\nReplacing security_feature_snapshot date window before load")
+    print("\nReplacing security_daily_feature_snapshot date window before load")
     print(f"Snapshot date window: {start_date} to {end_date}")
-    print(f"Prepared snapshot keys in window: {prepared_keys:,}")
+    print(f"Prepared daily snapshot keys in window: {prepared_keys:,}")
 
     with conn.cursor() as cur:
         cur.execute(
             """
-            DELETE FROM security_feature_snapshot
+            DELETE FROM security_daily_feature_snapshot
             WHERE snapshot_date BETWEEN %s AND %s
             """,
             (start_date, end_date),
         )
         deleted_rows = cur.rowcount
 
-    print(f"Deleted existing security_feature_snapshot rows in window: {deleted_rows:,}")
+    print(f"Deleted existing security_daily_feature_snapshot rows in window: {deleted_rows:,}")
+
+
+def delete_weekly_feature_snapshot_window(conn, weekly_df: pd.DataFrame) -> None:
+    start_date = weekly_df["week_end_date"].min()
+    end_date = weekly_df["week_end_date"].max()
+    prepared_keys = weekly_df[["week_end_date", "gvkey", "iid"]].drop_duplicates().shape[0]
+
+    print("\nReplacing security_weekly_feature_snapshot week window before load")
+    print(f"Week end date window: {start_date} to {end_date}")
+    print(f"Prepared weekly snapshot keys in window: {prepared_keys:,}")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM security_weekly_feature_snapshot
+            WHERE week_end_date BETWEEN %s AND %s
+            """,
+            (start_date, end_date),
+        )
+        deleted_rows = cur.rowcount
+
+    print(f"Deleted existing security_weekly_feature_snapshot rows in window: {deleted_rows:,}")
 
 
 def validate_security_master_active_count(conn, security_df: pd.DataFrame) -> None:
@@ -817,7 +953,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--only",
-        choices=["security", "security-master", "annual", "quarterly"],
+        choices=["security", "security-master", "daily", "weekly", "annual", "quarterly"],
         help="Load only one serving table.",
     )
     args = parser.parse_args()
@@ -836,8 +972,10 @@ def main() -> None:
         require_tables(conn, required_tables)
 
         with conn.transaction():
+            if args.only in (None, "security", "security-master", "daily", "weekly"):
+                security_master_df, daily_df, weekly_df = build_security_serving_rows(args.lookback_months)
+
             if args.only in (None, "security", "security-master"):
-                security_master_df, security_df = build_security_serving_rows(args.lookback_months)
                 print("\nMarking existing security_master rows inactive before upsert...")
                 deactivate_security_master(conn)
                 load_table(
@@ -863,12 +1001,12 @@ def main() -> None:
                     ["gvkey", "iid"],
                 )
 
-            if args.only in (None, "security"):
-                delete_security_feature_snapshot_window(conn, security_df)
+            if args.only in (None, "security", "daily"):
+                delete_daily_feature_snapshot_window(conn, daily_df)
                 load_table(
                     conn,
-                    "security_feature_snapshot",
-                    security_df,
+                    "security_daily_feature_snapshot",
+                    daily_df,
                     [
                         "snapshot_date",
                         "gvkey",
@@ -883,31 +1021,48 @@ def main() -> None:
                         "ma20",
                         "ma50",
                         "ma100",
-                        "week_start_date",
-                        "week_end_date",
-                        "weekly_close_price",
-                        "wma5",
-                        "wma10",
-                        "wma30",
-                        "daily_f_confirmation_pass",
                         "daily_f_confirmed_using_date",
                         "future_daily_ma20",
                         "future_daily_ma50",
                         "future_daily_ma100",
                         "future_daily_close_price",
                         "future_daily_adjusted_close_price",
-                        "weekly_h_confirmation_pass",
-                        "weekly_h_confirmed_using_date",
-                        "future_weekly_wma5",
-                        "future_weekly_wma10",
-                        "future_weekly_wma30",
-                        "future_weekly_close_price",
                         "source_s3_path",
                         "updated_at",
                     ],
                     ["snapshot_date", "gvkey", "iid"],
                 )
-                validate_security_master_active_count(conn, security_df)
+                validate_security_master_active_count(conn, daily_df)
+
+            if args.only in (None, "security", "weekly"):
+                delete_weekly_feature_snapshot_window(conn, weekly_df)
+                load_table(
+                    conn,
+                    "security_weekly_feature_snapshot",
+                    weekly_df,
+                    [
+                        "week_start_date",
+                        "week_end_date",
+                        "gvkey",
+                        "iid",
+                        "weekly_open_price",
+                        "weekly_high_price",
+                        "weekly_low_price",
+                        "weekly_close_price",
+                        "weekly_volume",
+                        "weekly_ma5",
+                        "weekly_ma10",
+                        "weekly_ma30",
+                        "weekly_h_confirmed_using_date",
+                        "future_weekly_ma5",
+                        "future_weekly_ma10",
+                        "future_weekly_ma30",
+                        "future_weekly_close_price",
+                        "source_s3_path",
+                        "updated_at",
+                    ],
+                    ["week_end_date", "gvkey", "iid"],
+                )
 
             if args.only in (None, "annual"):
                 annual_df = build_annual_rows()

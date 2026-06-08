@@ -127,7 +127,7 @@ The full pipeline now stops after processed feature creation. It no longer write
 bash scripts/load_processed_features_to_supabase.sh --apply-schema
 ```
 
-The Supabase serving load writes four tables: `security_master`, `security_feature_snapshot`, `annual_growth_history`, and `quarterly_growth_history`.
+The Supabase serving load writes five active tables: `security_master`, `security_daily_feature_snapshot`, `security_weekly_feature_snapshot`, `annual_growth_history`, and `quarterly_growth_history`.
 
 Weekly market metrics use `week_start_date` as the stable S3 partition key:
 
@@ -135,7 +135,7 @@ Weekly market metrics use `week_start_date` as the stable S3 partition key:
 s3://nasdaq-stock-recommendation/processed/weekly_market_metrics/year=YYYY/week_start_date=YYYY-MM-DD/weekly_market_metrics_YYYY-MM-DD.parquet
 ```
 
-The file still includes `week_end_date`, `security_week_last_trade_date`, and `data_as_of_date` columns. Re-running the weekly step during the same trading week overwrites the same `week_start_date` partition and logs any old same-week `week_end_date` prefixes it deletes.
+The file still includes `week_end_date`, `security_week_last_trade_date`, and `data_as_of_date` columns. `week_end_date` is the official final U.S. exchange trading session for that calendar week according to the `exchange_calendars` U.S. equities calendar. It is usually Friday, but it can be Thursday or another earlier session when Friday is a market holiday. Re-running the weekly step during the same trading week overwrites the same `week_start_date` partition and logs any old same-week `week_end_date` prefixes it deletes.
 
 If legacy `week_end_date=...` folders still appear from earlier runs, remove them with:
 
@@ -179,7 +179,7 @@ s3://nasdaq-stock-recommendation/processed/daily_market_metrics/
 s3://nasdaq-stock-recommendation/processed/weekly_market_metrics/
 ```
 
-`processed/recent_daily_volume_metrics/` is deprecated. Historical files may remain in S3, but the active pipeline no longer creates or reads them. Condition D is calculated dynamically from three months of `security_feature_snapshot.volume_ratio` history after the Supabase load.
+`processed/recent_daily_volume_metrics/` is deprecated. Historical files may remain in S3, but the active pipeline no longer creates or reads them. Condition D is calculated dynamically from three months of `security_daily_feature_snapshot.volume_ratio` history after the Supabase load.
 
 ## Troubleshooting
 

@@ -33,7 +33,7 @@ EventBridge SSM schedule at 20:05 KST Tue-Sat
 
 Manual EC2 starts no longer run the pipeline automatically.
 
-The active batch does not build `processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet`. That file was part of the older S3-only screening design. Condition D is now calculated dynamically from at least three months of `security_feature_snapshot.volume_ratio` history in Supabase.
+The active batch does not build `processed/recent_daily_volume_metrics/recent_daily_volume_metrics.parquet`. That file was part of the older S3-only screening design. Condition D is now calculated dynamically from at least three months of `security_daily_feature_snapshot.volume_ratio` history in Supabase.
 
 ## Required EC2 Files
 
@@ -89,12 +89,13 @@ It then prints Supabase row counts for:
 
 ```text
 security_master
-security_feature_snapshot
+security_daily_feature_snapshot
+security_weekly_feature_snapshot
 annual_growth_history
 quarterly_growth_history
 ```
 
-It also prints `security_feature_snapshot` date coverage, non-null `volume_ratio` rows, weekly matched rows, and dynamic Condition D lookback coverage.
+It also prints daily and weekly serving-table coverage, non-null `volume_ratio` rows, and dynamic Condition D lookback coverage.
 
 It also verifies processed S3 output under:
 

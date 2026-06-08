@@ -12,6 +12,10 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from server_pipeline.config import S3_BUCKET, RAW_DAILY_PREFIX, WEEKLY_MARKET_METRICS_PREFIX
 from server_pipeline.s3_duckdb import connect_duckdb_with_s3
+from server_pipeline.utils.trading_calendar import (
+    official_week_end_trading_date,
+    official_week_end_trading_dates,
+)
 
 
 MIN_WEEKLY_COVERAGE_RATIO = 0.9
@@ -280,6 +284,27 @@ def validate_weekly_output(df: pd.DataFrame) -> None:
             f"week_start_date:\n{bad_partitions.to_string(index=False)}"
         )
 
+    week_dates = df[["week_start_date", "week_end_date"]].drop_duplicates()
+    bad_official_week_ends = []
+    for row in week_dates.itertuples(index=False):
+        official_end = official_week_end_trading_date(row.week_start_date)
+        row_week_end = pd.Timestamp(row.week_end_date).date()
+        if official_end != row_week_end:
+            bad_official_week_ends.append(
+                {
+                    "week_start_date": row.week_start_date,
+                    "week_end_date": row_week_end,
+                    "official_week_end_date": official_end,
+                }
+            )
+    if bad_official_week_ends:
+        bad_df = pd.DataFrame(bad_official_week_ends)
+        raise RuntimeError(
+            "Weekly validation failed: week_end_date is not the official final "
+            "U.S. exchange trading session for the week:\n"
+            f"{bad_df.to_string(index=False)}"
+        )
+
     weekly_counts = df.groupby("week_start_date")["ticker"].nunique().sort_index()
     expected_coverage = int(weekly_counts.max() * MIN_WEEKLY_COVERAGE_RATIO)
     low_coverage = weekly_counts[weekly_counts < expected_coverage]
@@ -374,6 +399,20 @@ def main() -> None:
 
     warmup_start_sql = warmup_start_date.strftime("%Y-%m-%d")
     latest_date_sql = latest_date.strftime("%Y-%m-%d")
+    official_week_ends = official_week_end_trading_dates(warmup_start_date, latest_date)
+    official_week_rows = [
+        (week_start, week_end)
+        for week_start, week_end in official_week_ends.items()
+        if week_end <= latest_date
+    ]
+    if not official_week_rows:
+        raise RuntimeError("No official completed U.S. equity trading weeks found.")
+
+    official_week_values_sql = ",\n        ".join(
+        f"(DATE '{week_start}', DATE '{week_end}')"
+        for week_start, week_end in sorted(official_week_rows)
+    )
+    print(f"Official U.S. equity week-end dates available: {len(official_week_rows):,}")
 
     if start_week_date:
         target_weeks_sql = f"""
@@ -391,7 +430,12 @@ def main() -> None:
         """
 
     query = f"""
-    WITH raw_input AS (
+    WITH official_week_ends(week_start_date, official_week_end_date) AS (
+        VALUES
+        {official_week_values_sql}
+    ),
+
+    raw_input AS (
         SELECT *
         FROM read_parquet({raw_paths}, union_by_name = true)
     ),
@@ -406,6 +450,10 @@ def main() -> None:
             currency,
 
             close_price_raw,
+            open_price_raw,
+            high_price_raw,
+            low_price_raw,
+            volume,
 
             CASE
                 WHEN adjusted_close_price IS NOT NULL
@@ -460,24 +508,41 @@ def main() -> None:
         GROUP BY DATE_TRUNC('week', date)
     ),
 
-    weekly_close AS (
+    completed_official_weeks AS (
         SELECT
-            gvkey,
-            iid,
-            ticker,
-            company_name,
-            currency,
-            CAST(w.week_start_date AS DATE) AS week_start_date,
-            mw.market_week_end_date AS week_end_date,
-            w.date AS security_week_last_trade_date,
-
-            w.adjusted_close_price AS weekly_close_price,
-            w.close_price_raw AS weekly_close_price_raw
-
-        FROM weekly_ranked AS w
+            owe.week_start_date,
+            owe.official_week_end_date AS week_end_date
+        FROM official_week_ends AS owe
         INNER JOIN market_weeks AS mw
-          ON w.week_start_date = mw.week_start_date
-        WHERE w.rn_week = 1
+          ON owe.week_start_date = mw.week_start_date
+         AND owe.official_week_end_date = mw.market_week_end_date
+    ),
+
+    weekly_bars AS (
+        SELECT
+            w.gvkey,
+            w.iid,
+            ARG_MAX(w.ticker, w.date) AS ticker,
+            ARG_MAX(w.company_name, w.date) AS company_name,
+            ARG_MAX(w.currency, w.date) AS currency,
+            CAST(w.week_start_date AS DATE) AS week_start_date,
+            cow.week_end_date AS week_end_date,
+            MAX(w.date) AS security_week_last_trade_date,
+
+            ARG_MIN(w.adjusted_close_price, w.date) AS weekly_open_price,
+            MAX(w.adjusted_close_price) AS weekly_high_price,
+            MIN(w.adjusted_close_price) AS weekly_low_price,
+            ARG_MAX(w.adjusted_close_price, w.date) AS weekly_close_price,
+            ARG_MAX(w.close_price_raw, w.date) AS weekly_close_price_raw,
+            SUM(w.volume) AS weekly_volume
+        FROM weekly_ranked AS w
+        INNER JOIN completed_official_weeks AS cow
+          ON w.week_start_date = cow.week_start_date
+        GROUP BY
+            w.gvkey,
+            w.iid,
+            w.week_start_date,
+            cow.week_end_date
     ),
 
     weekly_ma AS (
@@ -486,21 +551,21 @@ def main() -> None:
             AVG(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
-                ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
+                ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
             ) AS wma5,
 
             AVG(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
-                ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
+                ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING
             ) AS wma10,
 
             AVG(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
-                ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
             ) AS wma30
-        FROM weekly_close
+        FROM weekly_bars
     ),
 
     metrics AS (
@@ -567,8 +632,12 @@ def main() -> None:
             w.company_name,
             w.currency,
 
+            w.weekly_open_price,
+            w.weekly_high_price,
+            w.weekly_low_price,
             w.weekly_close_price,
             w.weekly_close_price_raw,
+            w.weekly_volume,
             w.security_week_last_trade_date,
 
             w.wma5,

@@ -32,6 +32,7 @@ djangorestframework==3.15.2
 djangorestframework_simplejwt==5.4.0
 duckdb==1.5.3
 executing==2.2.1
+exchange_calendars==4.13.2
 fastjsonschema==2.21.2
 filelock==3.25.2
 flatbuffers==25.12.19
