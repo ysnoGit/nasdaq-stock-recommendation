@@ -1,71 +1,50 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from itertools import product
+
+import pandas as pd
 
 
-ANNUAL_GROWTH_CHOICES = [3, 5]
-QUARTERLY_GROWTH_CHOICES = [3, 5]
-VOLUME_RATIO_CHOICES = [5, 10]
-VOLUME_SURGE_MIN_DAY_CHOICES = [3, 5]
-
-FIXED_ANNUAL_YEARS = 3
-FIXED_QUARTER_COUNT = 4
-FIXED_DAILY_MA_TOLERANCE_PCT = 1
-FIXED_WEEKLY_MA_TOLERANCE_PCT = 2
-DEFAULT_START_DATE = "2022-01-01"
+ANNUAL_GROWTH_PCT = [2, 3]
+QUARTERLY_GROWTH_PCT = [2, 3]
+ANNUAL_YEARS = [2, 3]
+QUARTER_COUNTS = [2, 3, 4]
+VOLUME_RATIO_THRESHOLDS = [2, 3, 4, 5]
+VOLUME_SURGE_MIN_DAYS = [2, 3]
+DAILY_MA_TOLERANCE_PCT = 1
+WEEKLY_MA_TOLERANCE_PCT = 2
 
 
-@dataclass(frozen=True)
-class BacktestParameterCombination:
-    annual_growth_pct: int
-    quarterly_growth_pct: int
-    volume_ratio_threshold: int
-    volume_surge_min_days: int
-
-    @property
-    def parameter_set_name(self) -> str:
-        return (
-            f"grid_ag{self.annual_growth_pct}"
-            f"_qg{self.quarterly_growth_pct}"
-            f"_vr{self.volume_ratio_threshold}"
-            f"_vd{self.volume_surge_min_days}"
+def build_parameter_grid(start_date: str, end_date: str | None) -> pd.DataFrame:
+    rows = []
+    for values in product(
+        ANNUAL_GROWTH_PCT,
+        QUARTERLY_GROWTH_PCT,
+        ANNUAL_YEARS,
+        QUARTER_COUNTS,
+        VOLUME_RATIO_THRESHOLDS,
+        VOLUME_SURGE_MIN_DAYS,
+    ):
+        annual_pct, quarterly_pct, annual_years, quarter_count, volume_ratio, surge_days = values
+        rows.append(
+            {
+                "parameter_set_name": (
+                    f"ag{annual_pct}_qg{quarterly_pct}_ay{annual_years}"
+                    f"_qc{quarter_count}_vr{volume_ratio}_vd{surge_days}"
+                ),
+                "start_date": start_date,
+                "end_date": end_date,
+                "annual_growth_pct": annual_pct,
+                "quarterly_growth_pct": quarterly_pct,
+                "annual_years": annual_years,
+                "quarter_count": quarter_count,
+                "volume_ratio_threshold": volume_ratio,
+                "volume_surge_min_days": surge_days,
+                "daily_ma_tolerance_pct": DAILY_MA_TOLERANCE_PCT,
+                "weekly_ma_tolerance_pct": WEEKLY_MA_TOLERANCE_PCT,
+            }
         )
-
-    @property
-    def result_table_name(self) -> str:
-        return (
-            f"backtest_result_ag{self.annual_growth_pct}"
-            f"_qg{self.quarterly_growth_pct}"
-            f"_vr{self.volume_ratio_threshold}"
-            f"_vd{self.volume_surge_min_days}"
-        )
-
-
-def parameter_grid() -> list[BacktestParameterCombination]:
-    return [
-        BacktestParameterCombination(
-            annual_growth_pct=annual_growth_pct,
-            quarterly_growth_pct=quarterly_growth_pct,
-            volume_ratio_threshold=volume_ratio_threshold,
-            volume_surge_min_days=volume_surge_min_days,
-        )
-        for annual_growth_pct in ANNUAL_GROWTH_CHOICES
-        for quarterly_growth_pct in QUARTERLY_GROWTH_CHOICES
-        for volume_ratio_threshold in VOLUME_RATIO_CHOICES
-        for volume_surge_min_days in VOLUME_SURGE_MIN_DAY_CHOICES
-    ]
-
-
-def grid_parameter_names() -> list[str]:
-    return [combo.parameter_set_name for combo in parameter_grid()]
-
-
-def result_table_names() -> list[str]:
-    return [combo.result_table_name for combo in parameter_grid()]
-
-
-def result_table_for_parameter_set(parameter_set_name: str) -> str:
-    for combo in parameter_grid():
-        if combo.parameter_set_name == parameter_set_name:
-            return combo.result_table_name
-    raise ValueError(f"Unknown grid parameter set: {parameter_set_name}")
+    grid = pd.DataFrame(rows)
+    if len(grid) != 192:
+        raise RuntimeError(f"Expected 192 parameter combinations, built {len(grid)}.")
+    return grid

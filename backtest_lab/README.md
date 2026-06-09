@@ -1,91 +1,58 @@
 # Backtest Lab
 
-Temporary backtesting workspace for the NASDAQ stock recommendation pipeline.
+This directory is an isolated historical screening experiment. It reuses production S3 raw and processed data, but it does not modify the production pipeline or create another WRDS extraction system.
 
-Everything in this folder is intentionally isolated from the production pipeline and serving layer. The backtest lab reuses existing production S3 raw daily files and existing Supabase growth-history tables; it does not run a new WRDS extraction pipeline.
+## Storage Strategy
 
-## Tables
+Large daily and weekly feature data stays on EC2 as compressed Parquet under `backtest_lab/tmp/`. Each of the 192 parameter combinations is processed separately with DuckDB. Supabase stores only:
 
-- `backtest_security_master`
-- `backtest_daily_feature_snapshot`
-- `backtest_weekly_feature_snapshot`
-- `backtest_parameter_set`
-- `backtest_selection_event`
-- `backtest_price_flow_3m`
-- 16 materialized result tables named like `backtest_result_ag3_qg3_vr5_vd3`
+- `backtest_parameter_set`: 192 parameter combinations
+- `backtest_selection_outcome`: compact earliest-selection and price-outcome summaries
+- `backtest_run_log`: run status and diagnostics
+
+The runner deletes prior generated files under `backtest_lab/tmp/` at the start of every run. It never deletes production S3 data or automatically drops Supabase tables.
 
 ## Parameter Grid
 
-`backtest_lab/sql/create_backtest_tables.sql` creates 16 grid parameter sets:
+| Parameter | Choices |
+| --- | --- |
+| `annual_growth_pct` | 2, 3 |
+| `quarterly_growth_pct` | 2, 3 |
+| `annual_years` | 2, 3 |
+| `quarter_count` | 2, 3, 4 |
+| `volume_ratio_threshold` | 2, 3, 4, 5 |
+| `volume_surge_min_days` | 2, 3 |
+| `daily_ma_tolerance_pct` | 1 |
+| `weekly_ma_tolerance_pct` | 2 |
 
-- start date: `2022-01-01`
-- annual growth threshold choices: `3`, `5`
-- quarterly growth threshold choices: `3`, `5`
-- annual years: `3`
-- quarter count: `4`
-- volume ratio threshold choices: `5`, `10`
-- volume surge minimum day choices: `3`, `5`
-- daily MA tolerance: `1`
-- weekly MA tolerance: `2`
+Total: `2 x 2 x 2 x 3 x 4 x 2 = 192`.
 
-The full grid is `2 x 2 x 2 x 2 = 16` combinations. Each combination gets one physical result table after `run_backtest_selection.sh`.
+Growth percentages are user-facing values. For example, `annual_growth_pct = 2` is compared to the stored decimal growth ratio `0.02`.
 
-Growth choices are stored as user-facing percentages. The selection logic converts `3` to `0.03` and `5` to `0.05` before comparing them with the decimal growth ratios stored in the growth-history files.
-
-## EC2 Run Sequence
-
-From the repo root on EC2:
+## Run
 
 ```bash
 cd /home/ec2-user/projects/nasdaq-stock-recommendation
 source venv/bin/activate
 
-export AWS_REGION="ap-northeast-2"
-export AWS_DEFAULT_REGION="ap-northeast-2"
-
-Recommended storage-light run:
-
-```bash
-bash backtest_lab/scripts/run_backtest_pipeline.sh --start-date 2022-01-01
+bash backtest_lab/scripts/run_backtest.sh --start-date 2022-01-01
+bash backtest_lab/scripts/validate_results.sh
 ```
 
-This computes historical daily/weekly features locally with S3/DuckDB and loads only final selections, price-flow summaries, and 16 result tables into Supabase.
-
-The older table-loader scripts are still present for debugging, but do not use them for the full 2022+ backtest unless the Supabase database has enough storage for millions of feature rows:
+Debug one parameter set:
 
 ```bash
-export BACKTEST_ALLOW_SUPABASE_FEATURE_LOAD=true
-bash backtest_lab/scripts/prepare_backtest_data.sh --start-date 2022-01-01
-bash backtest_lab/scripts/run_backtest_selection.sh
+bash backtest_lab/scripts/run_backtest.sh --start-date 2022-01-01 --parameter-set-id 1
 ```
 
-`SUPABASE_DB_URL` must be set in the environment before running these scripts. Do not paste or commit the value.
+Clean generated local outputs manually:
 
-The full 2022+ daily feature table is large. If Supabase reports `No space left on device`, the database storage quota is exhausted before selection starts; reduce the backtest date window or increase Supabase database storage before rerunning.
+```bash
+bash backtest_lab/scripts/cleanup_outputs.sh
+```
 
-## What Gets Rebuilt
+## Safe Reruns
 
-The recommended `run_backtest_pipeline.sh` rebuilds these locally and does not store them in Supabase:
+Parameter insertion is idempotent. Before loading outcomes for one parameter set, the runner deletes only that parameter set's previous compact outcomes and inserts the newly calculated rows. Existing production tables are untouched.
 
-- daily features from existing raw S3 daily Parquet files
-- security master from the daily feature identity columns
-- weekly features from the rebuilt daily features
-
-Only final backtest outputs are stored in Supabase. The `backtest_daily_feature_snapshot` and `backtest_weekly_feature_snapshot` tables may remain empty in this workflow. Production tables are not deleted.
-
-## Selection Behavior
-
-`run_backtest_selection.sh` runs all 16 parameter combinations by default. It runs both:
-
-- `A_F`: A, B, C, D, E, F
-- `A_H`: A, B, C, D, E, F, G, H on completed weekly dates where `daily.snapshot_date = weekly.week_end_date`
-
-For each `parameter_set_id + screen_type + gvkey + iid`, only the earliest selected date is stored.
-
-After the canonical `backtest_selection_event` and `backtest_price_flow_3m` tables are updated, the script rebuilds one table per parameter combination, for example:
-
-- `backtest_result_ag3_qg3_vr5_vd3`
-- `backtest_result_ag3_qg3_vr5_vd5`
-- `backtest_result_ag5_qg5_vr10_vd5`
-
-Future daily and weekly confirmation columns are inputs for F and H. If future values are null, the condition is treated as pending and does not pass.
+The optional manual table-drop SQL is `sql/drop_backtest_tables_optional.sql`. It is never executed automatically.

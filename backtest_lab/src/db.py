@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import os
 from pathlib import Path
 from typing import Any
@@ -9,152 +8,84 @@ import numpy as np
 import pandas as pd
 
 
-BACKTEST_ROOT = Path(__file__).resolve().parents[1]
-
-
-def require_supabase_db_url() -> str:
-    db_url = os.environ.get("SUPABASE_DB_URL")
-    if db_url:
-        return db_url
-    raise RuntimeError(
-        "SUPABASE_DB_URL is not set. Set it in your shell profile or run:\n"
-        'export SUPABASE_DB_URL="postgresql://..."'
-    )
-
-
 def connect_supabase():
+    url = os.environ.get("SUPABASE_DB_URL")
+    if not url:
+        raise RuntimeError("SUPABASE_DB_URL is not set.")
     try:
         import psycopg
     except ImportError as exc:
-        raise RuntimeError(
-            "psycopg is not installed. Run: python3 -m pip install 'psycopg[binary]'"
-        ) from exc
-
-    return psycopg.connect(require_supabase_db_url())
+        raise RuntimeError("Install psycopg: python3 -m pip install 'psycopg[binary]'") from exc
+    return psycopg.connect(url)
 
 
-def read_sql_file(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
-
-
-def apply_sql_file(conn, path: Path) -> None:
+def execute_sql_file(conn, path: Path) -> None:
     with conn.cursor() as cur:
-        cur.execute(read_sql_file(path))
+        cur.execute(path.read_text(encoding="utf-8"))
 
 
-def table_count(conn, table: str) -> int:
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) FROM {table}")
-        return int(cur.fetchone()[0])
-
-
-def table_exists(conn, table: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass(%s)", (table,))
-        return cur.fetchone()[0] is not None
-
-
-def require_tables(conn, tables: list[str]) -> None:
-    missing = [table for table in tables if not table_exists(conn, table)]
-    if missing:
-        raise RuntimeError(
-            "Missing backtest table(s): "
-            f"{', '.join(missing)}. Run: bash backtest_lab/scripts/apply_backtest_schema.sh"
-        )
-
-
-def normalize_value(value: Any) -> Any:
+def normalize(value: Any) -> Any:
     if isinstance(value, pd.Timestamp):
-        if value.tzinfo:
-            return value.to_pydatetime()
         return value.to_pydatetime()
     if isinstance(value, np.generic):
         return value.item()
     return value
 
 
-def normalize_records(df: pd.DataFrame) -> list[tuple[Any, ...]]:
-    normalized = df.astype(object).where(pd.notna(df), None)
-    return [
-        tuple(normalize_value(value) for value in row)
-        for row in normalized.itertuples(index=False, name=None)
-    ]
+def records(df: pd.DataFrame, columns: list[str]) -> list[tuple[Any, ...]]:
+    clean = df[columns].astype(object).where(pd.notna(df[columns]), None)
+    return [tuple(normalize(value) for value in row) for row in clean.itertuples(index=False, name=None)]
 
 
-def upsert_dataframe(
-    conn,
-    table: str,
-    df: pd.DataFrame,
-    columns: list[str],
-    conflict_columns: list[str],
-) -> None:
-    if df.empty:
-        raise RuntimeError(f"No rows prepared for {table}.")
-
-    missing = [column for column in columns if column not in df.columns]
-    if missing:
-        raise RuntimeError(f"Missing columns for {table}: {missing}")
-
-    insert_columns = ", ".join(columns)
+def upsert_parameter_grid(conn, grid: pd.DataFrame) -> pd.DataFrame:
+    columns = list(grid.columns)
     placeholders = ", ".join(["%s"] * len(columns))
-    conflict_target = ", ".join(conflict_columns)
-    update_columns = [
-        column
-        for column in columns
-        if column not in conflict_columns and column != "created_at"
-    ]
-    update_clause = ", ".join(f"{column} = EXCLUDED.{column}" for column in update_columns)
-
+    conflict = (
+        "annual_growth_pct, quarterly_growth_pct, annual_years, quarter_count, "
+        "volume_ratio_threshold, volume_surge_min_days, daily_ma_tolerance_pct, "
+        "weekly_ma_tolerance_pct"
+    )
     sql = f"""
-        INSERT INTO {table} ({insert_columns})
+        INSERT INTO backtest_parameter_set ({", ".join(columns)})
         VALUES ({placeholders})
-        ON CONFLICT ({conflict_target})
-        DO UPDATE SET {update_clause}
+        ON CONFLICT ({conflict}) DO UPDATE SET
+            parameter_set_name = EXCLUDED.parameter_set_name,
+            start_date = EXCLUDED.start_date,
+            end_date = EXCLUDED.end_date
     """
-
-    records = normalize_records(df[columns])
     with conn.cursor() as cur:
-        cur.executemany(sql, records)
+        cur.executemany(sql, records(grid, columns))
+        cur.execute(
+            """
+            SELECT *
+            FROM backtest_parameter_set
+            ORDER BY parameter_set_id
+            """
+        )
+        rows = cur.fetchall()
+        names = [column.name for column in cur.description]
+    return pd.DataFrame(rows, columns=names)
 
 
-def delete_date_window(
-    conn,
-    table: str,
-    date_column: str,
-    start_date,
-    end_date,
-) -> int:
+def replace_outcomes(conn, parameter_set_id: int, outcomes: pd.DataFrame) -> None:
+    columns = [
+        "parameter_set_id", "screen_type", "selected_date", "gvkey", "iid",
+        "ticker", "company_name", "selected_price", "selected_adjusted_price",
+        "latest_price_date", "latest_price", "latest_adjusted_price",
+        "high_price", "high_price_date", "low_price", "low_price_date",
+        "return_pct", "max_return_pct", "max_drawdown_pct",
+        "trading_days_after_selection", "flag_a", "flag_b", "flag_c", "flag_d",
+        "flag_e", "flag_f", "flag_g", "flag_h", "source_result_path",
+    ]
     with conn.cursor() as cur:
         cur.execute(
-            f"DELETE FROM {table} WHERE {date_column} BETWEEN %s AND %s",
-            (start_date, end_date),
+            "DELETE FROM backtest_selection_outcome WHERE parameter_set_id = %s",
+            (parameter_set_id,),
         )
-        return int(cur.rowcount)
-
-
-def run_sql_file(path: Path) -> None:
-    statements = [
-        statement.strip()
-        for statement in read_sql_file(path).split(";")
-        if statement.strip()
-    ]
-    with connect_supabase() as conn:
-        with conn.cursor() as cur:
-            for result_index, statement in enumerate(statements, start=1):
-                cur.execute(statement)
-                if cur.description:
-                    print(f"\nResult set {result_index}")
-                    print([column.name for column in cur.description])
-                    for row in cur.fetchall():
-                        print(row)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a backtest_lab SQL file.")
-    parser.add_argument("--sql-file", required=True, type=Path)
-    args = parser.parse_args()
-    run_sql_file(args.sql_file)
-
-
-if __name__ == "__main__":
-    main()
+        if outcomes.empty:
+            return
+        placeholders = ", ".join(["%s"] * len(columns))
+        cur.executemany(
+            f"INSERT INTO backtest_selection_outcome ({', '.join(columns)}) VALUES ({placeholders})",
+            records(outcomes, columns),
+        )

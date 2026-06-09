@@ -1,1 +1,1 @@
-"""Temporary backtesting utilities isolated from the production pipeline."""
+"""Isolated historical backtesting package."""
