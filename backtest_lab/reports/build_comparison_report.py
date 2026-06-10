@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import re
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +18,6 @@ from docx.shared import Inches, Pt, RGBColor
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = Path(__file__).resolve().parent
-LOG_PATH = Path("/Users/ysno/.codex/attachments/66f3f92e-e721-448d-8114-7d0491f376d1/pasted-text.txt")
 DOCX_PATH = REPORT_DIR / "backtest_parameter_comparison_report.docx"
 CHART_PATH = REPORT_DIR / "parameter_sensitivity.png"
 
@@ -30,8 +31,8 @@ GOLD = "946200"
 RED = "9B1C1C"
 
 
-def parse_log() -> tuple[pd.DataFrame, dict]:
-    text = LOG_PATH.read_text(encoding="utf-8")
+def parse_log(log_path: Path) -> tuple[pd.DataFrame, dict]:
+    text = log_path.read_text(encoding="utf-8")
     pattern = re.compile(
         r"\((\d+), Decimal\('([\d.]+)'\), Decimal\('([\d.]+)'\), "
         r"(\d+), (\d+), Decimal\('([\d.]+)'\), (\d+), Decimal\('([\d.]+)'\), "
@@ -47,19 +48,39 @@ def parse_log() -> tuple[pd.DataFrame, dict]:
     numeric = [column for column in columns if column != "screen_type"]
     df[numeric] = df[numeric].apply(pd.to_numeric)
 
-    summary_pattern = re.compile(
+    causal_summary_pattern = re.compile(
+        r"\('([A-Z_]+)', (\d+), (\d+), (\d+), datetime\.date\((\d+), (\d+), (\d+)\), "
+        r"datetime\.date\((\d+), (\d+), (\d+)\), datetime\.date\((\d+), (\d+), (\d+)\), "
+        r"datetime\.date\((\d+), (\d+), (\d+)\)\)"
+    )
+    legacy_summary_pattern = re.compile(
         r"\('([A-Z_]+)', (\d+), (\d+), (\d+), datetime\.date\((\d+), (\d+), (\d+)\), "
         r"datetime\.date\((\d+), (\d+), (\d+)\)\)"
     )
     screen_summary = {}
-    for match in summary_pattern.findall(text):
+    for match in causal_summary_pattern.findall(text):
         screen_summary[match[0]] = {
             "outcomes": int(match[1]),
             "parameter_sets": int(match[2]),
             "unique_securities": int(match[3]),
-            "earliest": f"{match[4]}-{int(match[5]):02d}-{int(match[6]):02d}",
-            "latest": f"{match[7]}-{int(match[8]):02d}-{int(match[9]):02d}",
+            "earliest_signal": f"{match[4]}-{int(match[5]):02d}-{int(match[6]):02d}",
+            "latest_signal": f"{match[7]}-{int(match[8]):02d}-{int(match[9]):02d}",
+            "earliest_entry": f"{match[10]}-{int(match[11]):02d}-{int(match[12]):02d}",
+            "latest_entry": f"{match[13]}-{int(match[14]):02d}-{int(match[15]):02d}",
         }
+    if not screen_summary:
+        for match in legacy_summary_pattern.findall(text):
+            screen_summary[match[0]] = {
+                "outcomes": int(match[1]),
+                "parameter_sets": int(match[2]),
+                "unique_securities": int(match[3]),
+                "earliest_signal": f"{match[4]}-{int(match[5]):02d}-{int(match[6]):02d}",
+                "latest_signal": f"{match[7]}-{int(match[8]):02d}-{int(match[9]):02d}",
+                "earliest_entry": "not available",
+                "latest_entry": "not available",
+            }
+    if df.empty or set(screen_summary) != {"A_F", "A_H"}:
+        raise ValueError(f"Could not parse complete A-F/A-H results from {log_path}")
     return df, screen_summary
 
 
@@ -196,6 +217,7 @@ def build_report(df: pd.DataFrame, screen_summary: dict) -> None:
     pivot["total"] = pivot.get("A_F", 0) + pivot.get("A_H", 0)
     pivot["a_h_share"] = pivot.get("A_H", 0) / pivot.get("A_F", 1).replace(0, 1)
     top = pivot.sort_values(["total", "A_H"], ascending=False).head(10)
+    bottom = pivot.sort_values(["total", "A_H", "A_F"], ascending=True).head(10)
 
     doc = Document()
     section = doc.sections[0]
@@ -229,7 +251,7 @@ def build_report(df: pd.DataFrame, screen_summary: dict) -> None:
     header.runs[0].font.color.rgb = RGBColor.from_string(MID_GRAY)
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    footer.add_run("Generated June 9, 2026").font.size = Pt(8.5)
+    footer.add_run(f"Generated {date.today().strftime('%B %d, %Y')}").font.size = Pt(8.5)
 
     title = doc.add_paragraph()
     title.paragraph_format.space_after = Pt(3)
@@ -245,11 +267,14 @@ def build_report(df: pd.DataFrame, screen_summary: dict) -> None:
 
     meta = doc.add_paragraph()
     meta.add_run("Evaluation window: ").bold = True
-    meta.add_run("January 1, 2022 to June 9, 2026  |  ")
+    meta.add_run(
+        f"{min(item['earliest_signal'] for item in screen_summary.values())} to "
+        f"{max(item['latest_entry'] for item in screen_summary.values())}  |  "
+    )
     meta.add_run("Parameter sets: ").bold = True
     meta.add_run("192  |  ")
     meta.add_run("Compact outcomes: ").bold = True
-    meta.add_run("4,550")
+    meta.add_run(f"{sum(item['outcomes'] for item in screen_summary.values()):,}")
 
     callout = doc.add_table(rows=1, cols=1)
     callout.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -259,28 +284,53 @@ def build_report(df: pd.DataFrame, screen_summary: dict) -> None:
     p = cell.paragraphs[0]
     r = p.add_run(
         "Key conclusion: volume-ratio threshold is the dominant driver of screening yield. "
-        "The broadest configuration selected 92 A-F and 23 A-H securities, while stricter "
+        f"The broadest configuration selected {int(pivot['A_F'].max())} A-F and "
+        f"{int(pivot['A_H'].max())} A-H securities, while stricter "
         "volume settings reduced the candidate pool rapidly. This report compares screening "
         "coverage, not realized investment-return quality."
     )
     r.bold = True
     r.font.color.rgb = RGBColor.from_string(NAVY)
 
+    add_heading(doc, "Parameter Choice Reference", 1)
+    add_bullet(
+        doc,
+        "Six selectable parameters form the 192-combination grid. Daily and weekly "
+        "moving-average tolerances remain fixed across every parameter set.",
+    )
+    parameter_rows = [
+        ["Annual growth %", "A", "2%, 3%", "Selectable", "Minimum annual revenue and operating-income growth."],
+        ["Quarterly growth %", "B", "2%, 3%", "Selectable", "Minimum quarterly revenue and operating-income growth."],
+        ["Annual periods", "A", "2, 3 years", "Selectable", "Number of latest annual periods that must pass."],
+        ["Quarterly periods", "B", "2, 3, 4 quarters", "Selectable", "Number of latest quarterly periods that must pass."],
+        ["Volume ratio", "C / D", "2x, 3x, 4x, 5x", "Selectable", "Required volume-surge multiple."],
+        ["Volume surge days", "D", "2, 3 days", "Selectable", "Minimum surge days in the recent-volume window."],
+        ["Daily MA tolerance", "E / F", "1%", "Fixed", "Allowed daily MA20/MA50/MA100 alignment tolerance."],
+        ["Weekly MA tolerance", "G / H", "2%", "Fixed", "Allowed weekly MA5/MA10/MA30 alignment tolerance."],
+    ]
+    add_table(
+        doc,
+        ["Parameter", "Conditions", "Choices", "Mode", "Meaning"],
+        parameter_rows,
+        [1.3, 0.7, 1.2, 0.8, 2.5],
+        font_size=7.8,
+    )
+
     add_heading(doc, "Executive Summary", 1)
     add_bullet(doc, "The run completed successfully across all 192 parameter combinations with no duplicate outcomes, missing core prices, invalid dates, or high/low inconsistencies.")
-    add_bullet(doc, "A-F produced 3,698 parameter-security outcomes across all 192 parameter sets and 92 unique securities.")
-    add_bullet(doc, "A-H produced 852 outcomes across 132 parameter sets and 23 unique securities; weekly confirmation substantially narrows the candidate universe.")
+    add_bullet(doc, f"A-F produced {screen_summary['A_F']['outcomes']:,} parameter-security outcomes across {screen_summary['A_F']['parameter_sets']} parameter sets and {screen_summary['A_F']['unique_securities']} unique securities.")
+    add_bullet(doc, f"A-H produced {screen_summary['A_H']['outcomes']:,} outcomes across {screen_summary['A_H']['parameter_sets']} parameter sets and {screen_summary['A_H']['unique_securities']} unique securities; weekly confirmation narrows the candidate universe.")
     add_bullet(doc, "Lower volume-ratio thresholds and shorter fundamental-history requirements produce the largest candidate pools.")
     add_bullet(doc, "Return, median return, win rate, and drawdown ranking are not present in the execution log; those metrics should be queried from `backtest_selection_outcome` before selecting a final strategy.")
 
     add_heading(doc, "Validated Run Overview", 1)
     overview_rows = [
-        ["A-F", f"{screen_summary['A_F']['outcomes']:,}", screen_summary["A_F"]["parameter_sets"], screen_summary["A_F"]["unique_securities"], screen_summary["A_F"]["earliest"], screen_summary["A_F"]["latest"]],
-        ["A-H", f"{screen_summary['A_H']['outcomes']:,}", screen_summary["A_H"]["parameter_sets"], screen_summary["A_H"]["unique_securities"], screen_summary["A_H"]["earliest"], screen_summary["A_H"]["latest"]],
+        ["A-F", f"{screen_summary['A_F']['outcomes']:,}", screen_summary["A_F"]["parameter_sets"], screen_summary["A_F"]["unique_securities"], screen_summary["A_F"]["earliest_signal"], screen_summary["A_F"]["latest_entry"]],
+        ["A-H", f"{screen_summary['A_H']['outcomes']:,}", screen_summary["A_H"]["parameter_sets"], screen_summary["A_H"]["unique_securities"], screen_summary["A_H"]["earliest_signal"], screen_summary["A_H"]["latest_entry"]],
     ]
     add_table(
         doc,
-        ["Screen", "Outcomes", "Sets with results", "Unique stocks", "Earliest", "Latest"],
+        ["Screen", "Outcomes", "Sets with results", "Unique stocks", "First signal", "Last entry"],
         overview_rows,
         [0.7, 0.85, 1.15, 1.0, 1.05, 1.05],
         font_size=8.5,
@@ -325,10 +375,21 @@ def build_report(df: pd.DataFrame, screen_summary: dict) -> None:
     )
 
     add_heading(doc, "Interpretation", 2)
-    add_bullet(doc, "Volume ratio is the strongest selectivity lever: average A-F yield falls from 51.4 stocks at 2x volume to 3.6 at 5x; average A-H yield falls from 11.2 to 1.2.")
-    add_bullet(doc, "Requiring three annual periods instead of two roughly halves average A-F yield, from 26.2 to 12.4.")
-    add_bullet(doc, "Increasing the quarterly requirement from two to four periods reduces average A-F yield from 23.6 to 15.3.")
-    add_bullet(doc, "Moving from two to three surge days reduces average A-F yield from 22.1 to 16.4, a meaningful but less severe reduction than volume ratio.")
+    for factor, label in [
+        ("volume_ratio_threshold", "Volume ratio"),
+        ("annual_years", "Annual-period requirement"),
+        ("quarter_count", "Quarterly-period requirement"),
+        ("volume_surge_min_days", "Volume-surge-day requirement"),
+    ]:
+        grouped = df.groupby([factor, "screen_type"])["selected_stock_count"].mean().unstack(fill_value=0)
+        low, high = grouped.index.min(), grouped.index.max()
+        add_bullet(
+            doc,
+            f"{label}: moving from {low:g} to {high:g} changes average A-F yield "
+            f"from {grouped.loc[low].get('A_F', 0):.1f} to {grouped.loc[high].get('A_F', 0):.1f} "
+            f"and average A-H yield from {grouped.loc[low].get('A_H', 0):.1f} "
+            f"to {grouped.loc[high].get('A_H', 0):.1f}.",
+        )
 
     add_heading(doc, "Highest-Coverage Parameter Sets", 1)
     top_rows = []
@@ -352,13 +413,54 @@ def build_report(df: pd.DataFrame, screen_summary: dict) -> None:
         font_size=8.2,
     )
 
+    doc.add_page_break()
+    add_heading(doc, "Lowest-Coverage Parameter Sets", 1)
+    add_bullet(
+        doc,
+        "These configurations produced the fewest combined A-F and A-H selections. "
+        "Their sparse samples are useful for understanding selectivity, but are too small "
+        "for reliable return-performance conclusions.",
+    )
+    bottom_rows = []
+    for _, row in bottom.iterrows():
+        bottom_rows.append(
+            [
+                int(row["parameter_set_id"]),
+                f"{int(row['annual_growth_pct'])}/{int(row['quarterly_growth_pct'])}",
+                f"{int(row['annual_years'])}/{int(row['quarter_count'])}",
+                f"{int(row['volume_ratio_threshold'])}x/{int(row['volume_surge_min_days'])}d",
+                int(row.get("A_F", 0)),
+                int(row.get("A_H", 0)),
+                int(row["total"]),
+            ]
+        )
+    add_table(
+        doc,
+        ["ID", "Growth A/Q", "Periods A/Q", "Volume", "A-F", "A-H", "Total"],
+        bottom_rows,
+        [0.45, 0.9, 1.0, 1.0, 0.55, 0.55, 0.6],
+        font_size=8.2,
+    )
+
     add_heading(doc, "Recommended Comparison Set", 1)
-    recommendation_rows = [
-        ["Broad discovery", "1", "2%/2%, 2 annual, 2 quarters, 2x volume, 2 surge days", "92 / 23", "Largest sample; suitable baseline."],
-        ["Moderate volume", "3", "2%/2%, 2 annual, 2 quarters, 3x volume, 2 surge days", "36 / 13", "Meaningfully stricter while retaining A-H coverage."],
-        ["Strict volume", "7", "2%/2%, 2 annual, 2 quarters, 5x volume, 2 surge days", "9 / 2", "Small sample; useful only as a high-conviction comparator."],
-        ["Durability focus", "41", "2%/2%, 3 annual, 4 quarters, 2x volume, 2 surge days", "33 / 7", "Longer fundamental history with usable sample size."],
+    recommendation_rows = []
+    recommendation_specs = [
+        ("Broad discovery", 1, "Largest sample; suitable baseline."),
+        ("Moderate volume", 3, "Stricter volume comparator."),
+        ("Strict volume", 7, "High-conviction, smaller-sample comparator."),
+        ("Durability focus", 41, "Longer fundamental-history comparator."),
     ]
+    for role, identifier, use in recommendation_specs:
+        row = pivot.loc[pivot["parameter_set_id"] == identifier].iloc[0]
+        configuration = (
+            f"{int(row['annual_growth_pct'])}%/{int(row['quarterly_growth_pct'])}%, "
+            f"{int(row['annual_years'])} annual, {int(row['quarter_count'])} quarters, "
+            f"{int(row['volume_ratio_threshold'])}x volume, "
+            f"{int(row['volume_surge_min_days'])} surge days"
+        )
+        recommendation_rows.append(
+            [role, identifier, configuration, f"{int(row['A_F'])} / {int(row['A_H'])}", use]
+        )
     add_table(
         doc,
         ["Role", "ID", "Configuration", "A-F / A-H", "Use"],
@@ -401,14 +503,17 @@ def build_report(df: pd.DataFrame, screen_summary: dict) -> None:
     add_heading(doc, "Scope and Limitations", 1)
     add_bullet(doc, "This report uses the validated execution log and compares selection yield, not realized portfolio returns.")
     add_bullet(doc, "The same security may appear in many parameter sets, so outcome rows are not independent observations.")
-    add_bullet(doc, "Fundamental histories use `datadate <= selected_date`; actual public filing-availability dates are unavailable, so some look-ahead-bias risk remains.")
+    add_bullet(doc, "Fundamental histories use `datadate <= signal_date`; actual public filing-availability dates are unavailable, so some look-ahead-bias risk remains.")
     add_bullet(doc, "No transaction costs, liquidity constraints, holding rules, or overlapping-position controls are included.")
 
     doc.save(DOCX_PATH)
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Build the screening-yield comparison report.")
+    parser.add_argument("--log", type=Path, required=True, help="Validated backtest execution log.")
+    args = parser.parse_args()
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    data, summaries = parse_log()
+    data, summaries = parse_log(args.log)
     build_report(data, summaries)
     print(DOCX_PATH)

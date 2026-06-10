@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS backtest_selection_outcome (
     return_pct numeric,
     max_return_pct numeric,
     max_drawdown_pct numeric,
+    return_6m_date date,
+    price_6m numeric,
+    return_6m_pct numeric,
+    return_1y_date date,
+    price_1y numeric,
+    return_1y_pct numeric,
+    return_2y_date date,
+    price_2y numeric,
+    return_2y_pct numeric,
     trading_days_after_selection integer,
     flag_a boolean NOT NULL,
     flag_b boolean NOT NULL,
@@ -67,7 +76,16 @@ ALTER TABLE backtest_selection_outcome
     ADD COLUMN IF NOT EXISTS signal_date date,
     ADD COLUMN IF NOT EXISTS f_confirmation_date date,
     ADD COLUMN IF NOT EXISTS g_confirmation_date date,
-    ADD COLUMN IF NOT EXISTS h_confirmation_date date;
+    ADD COLUMN IF NOT EXISTS h_confirmation_date date,
+    ADD COLUMN IF NOT EXISTS return_6m_date date,
+    ADD COLUMN IF NOT EXISTS price_6m numeric,
+    ADD COLUMN IF NOT EXISTS return_6m_pct numeric,
+    ADD COLUMN IF NOT EXISTS return_1y_date date,
+    ADD COLUMN IF NOT EXISTS price_1y numeric,
+    ADD COLUMN IF NOT EXISTS return_1y_pct numeric,
+    ADD COLUMN IF NOT EXISTS return_2y_date date,
+    ADD COLUMN IF NOT EXISTS price_2y numeric,
+    ADD COLUMN IF NOT EXISTS return_2y_pct numeric;
 
 CREATE INDEX IF NOT EXISTS idx_backtest_outcome_parameter
     ON backtest_selection_outcome (parameter_set_id, screen_type);

@@ -19,6 +19,11 @@ confirm H. Separate `signal_date`, `f_confirmation_date`,
 `g_confirmation_date`, and `h_confirmation_date` columns preserve the timing
 audit trail.
 
+Each outcome also stores fixed-horizon returns at 6 months, 1 year, and 2 years.
+The price for each horizon is the first available trading price on or after the
+calendar anniversary of the actionable `selected_date`. A selection that has
+not yet reached a horizon keeps that horizon's date, price, and return null.
+
 ## Parameter Grid
 
 | Parameter | Choices |
@@ -44,6 +49,42 @@ source venv/bin/activate
 
 bash backtest_lab/scripts/run_backtest.sh --start-date 2022-01-01
 bash backtest_lab/scripts/validate_results.sh
+bash backtest_lab/scripts/export_performance_comparison.sh
+python3 backtest_lab/reports/build_performance_report.py
+```
+
+Or regenerate the export and performance report together:
+
+```bash
+bash backtest_lab/scripts/regenerate_performance_report.sh
+```
+
+The performance export connects directly to Supabase and writes the complete
+A-F/A-H aggregate result to:
+
+- `backtest_lab/reports/performance_comparison.json`
+- `backtest_lab/reports/performance_comparison.csv`
+
+This avoids SQL-editor display/export row limits.
+The export includes the six selectable parameter values, causal signal/entry
+date ranges, and completed sample size, average return, median return, and win
+rate for each fixed horizon.
+
+The performance report builder requires the complete export: exactly 192 A-F
+rows and 192 A-H rows. It writes:
+
+- `backtest_lab/reports/backtest_performance_comparison_report.docx`
+- `backtest_lab/reports/backtest_performance_comparison_report.pdf` when LibreOffice is available
+
+The report ranks each screen separately at 6 months, 1 year, and 2 years.
+Its final combined ranking averages the three average-return ranks. A parameter
+set is eligible for the combined ranking only when it meets the report's
+minimum completed sample size at all three horizons.
+
+Regenerate the screening-yield report from a validation log with:
+
+```bash
+python3 backtest_lab/reports/build_comparison_report.py --log /path/to/validation.log
 ```
 
 Debug one parameter set:

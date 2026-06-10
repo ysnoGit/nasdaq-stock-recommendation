@@ -121,7 +121,8 @@ def main() -> None:
                 for column in [
                     "signal_date", "f_confirmation_date", "g_confirmation_date",
                     "h_confirmation_date", "selected_date", "latest_price_date",
-                    "high_price_date", "low_price_date",
+                    "high_price_date", "low_price_date", "return_6m_date",
+                    "return_1y_date", "return_2y_date",
                 ]:
                     outcomes[column] = pd.to_datetime(outcomes[column]).dt.date
             else:

@@ -163,6 +163,67 @@ class CausalTimingTest(unittest.TestCase):
             drawdowns = dict(zip(outcomes["screen_type"], outcomes["max_drawdown_pct"]))
             self.assertAlmostEqual(drawdowns["A_F"], 0.0)
             self.assertAlmostEqual(drawdowns["A_H"], 0.0)
+            self.assertTrue(outcomes["return_6m_pct"].isna().all())
+            self.assertTrue(outcomes["return_1y_pct"].isna().all())
+            self.assertTrue(outcomes["return_2y_pct"].isna().all())
+
+    def test_fixed_horizon_returns_use_first_price_on_or_after_anniversary(self):
+        con = duckdb.connect()
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            selection_path = tmp_path / "selections.parquet"
+            daily_path = tmp_path / "daily.parquet"
+            con.execute(
+                """
+                CREATE TABLE selections AS SELECT
+                    1::BIGINT AS parameter_set_id, 'A_F' AS screen_type,
+                    DATE '2024-01-01' AS signal_date,
+                    DATE '2024-01-02' AS f_confirmation_date,
+                    NULL::DATE AS g_confirmation_date,
+                    NULL::DATE AS h_confirmation_date,
+                    DATE '2024-01-02' AS selected_date,
+                    '1' AS gvkey, '01' AS iid, 'TEST' AS ticker,
+                    'Test Company' AS company_name,
+                    100.0 AS selected_price, 100.0 AS selected_adjusted_price,
+                    TRUE AS flag_a, TRUE AS flag_b, TRUE AS flag_c,
+                    TRUE AS flag_d, TRUE AS flag_e, TRUE AS flag_f,
+                    NULL::BOOLEAN AS flag_g, NULL::BOOLEAN AS flag_h
+                """
+            )
+            con.execute(
+                """
+                CREATE TABLE horizon_daily (
+                    snapshot_date DATE, gvkey VARCHAR, iid VARCHAR,
+                    close_price DOUBLE, adjusted_close_price DOUBLE
+                )
+                """
+            )
+            con.execute(
+                """
+                INSERT INTO horizon_daily VALUES
+                    ('2024-01-02', '1', '01', 100, 100),
+                    ('2024-07-01', '1', '01', 105, 105),
+                    ('2024-07-02', '1', '01', 110, 110),
+                    ('2025-01-02', '1', '01', 120, 120),
+                    ('2026-01-02', '1', '01', 150, 150)
+                """
+            )
+            con.sql("SELECT * FROM selections").write_parquet(str(selection_path))
+            con.sql("SELECT * FROM horizon_daily").write_parquet(str(daily_path))
+
+            original_path = price_outcome.DAILY_FEATURE_PATH
+            price_outcome.DAILY_FEATURE_PATH = daily_path
+            try:
+                outcome = calculate_price_outcomes(con, selection_path, "test").df().iloc[0]
+            finally:
+                price_outcome.DAILY_FEATURE_PATH = original_path
+
+            self.assertEqual(outcome["return_6m_date"].date(), date(2024, 7, 2))
+            self.assertEqual(outcome["return_1y_date"].date(), date(2025, 1, 2))
+            self.assertEqual(outcome["return_2y_date"].date(), date(2026, 1, 2))
+            self.assertAlmostEqual(outcome["return_6m_pct"], 10.0)
+            self.assertAlmostEqual(outcome["return_1y_pct"], 20.0)
+            self.assertAlmostEqual(outcome["return_2y_pct"], 50.0)
 
     def test_g_confirmation_cannot_precede_f_confirmation(self):
         con = duckdb.connect()

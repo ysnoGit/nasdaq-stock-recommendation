@@ -75,6 +75,9 @@ def replace_outcomes(conn, parameter_set_id: int, outcomes: pd.DataFrame) -> Non
         "latest_price_date", "latest_price", "latest_adjusted_price",
         "high_price", "high_price_date", "low_price", "low_price_date",
         "return_pct", "max_return_pct", "max_drawdown_pct",
+        "return_6m_date", "price_6m", "return_6m_pct",
+        "return_1y_date", "price_1y", "return_1y_pct",
+        "return_2y_date", "price_2y", "return_2y_pct",
         "trading_days_after_selection", "flag_a", "flag_b", "flag_c", "flag_d",
         "flag_e", "flag_f", "flag_g", "flag_h", "source_result_path",
     ]

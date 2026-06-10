@@ -83,4 +83,33 @@ SELECT COUNT(*) AS bad_price_rows
 FROM backtest_selection_outcome
 WHERE high_price < low_price;
 
+SELECT COUNT(*) AS inconsistent_fixed_horizon_rows
+FROM backtest_selection_outcome
+WHERE (return_6m_date IS NULL) <> (price_6m IS NULL)
+   OR (return_6m_date IS NULL) <> (return_6m_pct IS NULL)
+   OR (return_1y_date IS NULL) <> (price_1y IS NULL)
+   OR (return_1y_date IS NULL) <> (return_1y_pct IS NULL)
+   OR (return_2y_date IS NULL) <> (price_2y IS NULL)
+   OR (return_2y_date IS NULL) <> (return_2y_pct IS NULL);
+
+SELECT COUNT(*) AS bad_fixed_horizon_date_rows
+FROM backtest_selection_outcome
+WHERE return_6m_date < selected_date + INTERVAL '6 months'
+   OR return_1y_date < selected_date + INTERVAL '1 year'
+   OR return_2y_date < selected_date + INTERVAL '2 years'
+   OR (return_6m_date IS NOT NULL AND return_1y_date IS NOT NULL
+       AND return_1y_date < return_6m_date)
+   OR (return_1y_date IS NOT NULL AND return_2y_date IS NOT NULL
+       AND return_2y_date < return_1y_date);
+
+SELECT
+    screen_type,
+    COUNT(*) AS selections,
+    COUNT(return_6m_pct) AS completed_6m,
+    COUNT(return_1y_pct) AS completed_1y,
+    COUNT(return_2y_pct) AS completed_2y
+FROM backtest_selection_outcome
+GROUP BY screen_type
+ORDER BY screen_type;
+
 SELECT * FROM backtest_run_log ORDER BY run_id DESC LIMIT 10;

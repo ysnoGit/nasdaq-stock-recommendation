@@ -44,6 +44,24 @@ def calculate_price_outcomes(
                 arg_max(adjusted_close_price, price_date) AS latest_adjusted_price,
                 MAX(price) AS high_price,
                 MIN(price) AS low_price,
+                arg_min(price, price_date) FILTER (
+                    WHERE price_date >= selected_date + INTERVAL '6 months'
+                ) AS price_6m,
+                MIN(price_date) FILTER (
+                    WHERE price_date >= selected_date + INTERVAL '6 months'
+                ) AS return_6m_date,
+                arg_min(price, price_date) FILTER (
+                    WHERE price_date >= selected_date + INTERVAL '1 year'
+                ) AS price_1y,
+                MIN(price_date) FILTER (
+                    WHERE price_date >= selected_date + INTERVAL '1 year'
+                ) AS return_1y_date,
+                arg_min(price, price_date) FILTER (
+                    WHERE price_date >= selected_date + INTERVAL '2 years'
+                ) AS price_2y,
+                MIN(price_date) FILTER (
+                    WHERE price_date >= selected_date + INTERVAL '2 years'
+                ) AS return_2y_date,
                 COUNT(*)::INTEGER AS trading_days_after_selection
             FROM priced
             GROUP BY ALL
@@ -58,6 +76,12 @@ def calculate_price_outcomes(
                 THEN (s.high_price / s.selected_price - 1) * 100 END AS max_return_pct,
             CASE WHEN s.selected_price <> 0
                 THEN (s.low_price / s.selected_price - 1) * 100 END AS max_drawdown_pct,
+            CASE WHEN s.selected_price <> 0 AND s.price_6m IS NOT NULL
+                THEN (s.price_6m / s.selected_price - 1) * 100 END AS return_6m_pct,
+            CASE WHEN s.selected_price <> 0 AND s.price_1y IS NOT NULL
+                THEN (s.price_1y / s.selected_price - 1) * 100 END AS return_1y_pct,
+            CASE WHEN s.selected_price <> 0 AND s.price_2y IS NOT NULL
+                THEN (s.price_2y / s.selected_price - 1) * 100 END AS return_2y_pct,
             '{source_result_path.replace("'", "''")}' AS source_result_path
         FROM summary s
         JOIN priced p USING (parameter_set_id, screen_type, signal_date, selected_date, gvkey, iid)
