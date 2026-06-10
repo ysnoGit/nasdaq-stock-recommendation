@@ -12,6 +12,13 @@ Large daily and weekly feature data stays on EC2 as compressed Parquet under `ba
 
 The runner deletes prior generated files under `backtest_lab/tmp/` at the start of every run. It never deletes production S3 data or automatically drops Supabase tables.
 
+`backtest_selection_outcome.selected_date` is the actionable confirmation date,
+not the original A-E signal date. A-F entries begin on the next trading row used
+to confirm F. A-H entries begin on the following completed weekly row used to
+confirm H. Separate `signal_date`, `f_confirmation_date`,
+`g_confirmation_date`, and `h_confirmation_date` columns preserve the timing
+audit trail.
+
 ## Parameter Grid
 
 | Parameter | Choices |

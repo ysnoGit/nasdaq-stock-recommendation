@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS backtest_selection_outcome (
     outcome_id bigserial PRIMARY KEY,
     parameter_set_id bigint NOT NULL REFERENCES backtest_parameter_set(parameter_set_id),
     screen_type text NOT NULL CHECK (screen_type IN ('A_F', 'A_H')),
+    signal_date date,
+    f_confirmation_date date,
+    g_confirmation_date date,
+    h_confirmation_date date,
     selected_date date NOT NULL,
     gvkey text NOT NULL,
     iid text NOT NULL,
@@ -58,6 +62,12 @@ CREATE TABLE IF NOT EXISTS backtest_selection_outcome (
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (parameter_set_id, screen_type, gvkey, iid)
 );
+
+ALTER TABLE backtest_selection_outcome
+    ADD COLUMN IF NOT EXISTS signal_date date,
+    ADD COLUMN IF NOT EXISTS f_confirmation_date date,
+    ADD COLUMN IF NOT EXISTS g_confirmation_date date,
+    ADD COLUMN IF NOT EXISTS h_confirmation_date date;
 
 CREATE INDEX IF NOT EXISTS idx_backtest_outcome_parameter
     ON backtest_selection_outcome (parameter_set_id, screen_type);

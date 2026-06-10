@@ -119,7 +119,9 @@ def main() -> None:
                 outcomes_relation.write_parquet(str(outcome_path), compression="zstd")
                 outcomes = outcomes_relation.df()
                 for column in [
-                    "selected_date", "latest_price_date", "high_price_date", "low_price_date"
+                    "signal_date", "f_confirmation_date", "g_confirmation_date",
+                    "h_confirmation_date", "selected_date", "latest_price_date",
+                    "high_price_date", "low_price_date",
                 ]:
                     outcomes[column] = pd.to_datetime(outcomes[column]).dt.date
             else:

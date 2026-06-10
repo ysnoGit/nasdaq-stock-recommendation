@@ -21,8 +21,10 @@ SELECT
     COUNT(*) AS outcome_rows,
     COUNT(DISTINCT parameter_set_id) AS parameter_sets_with_results,
     COUNT(DISTINCT gvkey || '-' || iid) AS unique_securities,
-    MIN(selected_date) AS earliest_selected_date,
-    MAX(selected_date) AS latest_selected_date
+    MIN(signal_date) AS earliest_signal_date,
+    MAX(signal_date) AS latest_signal_date,
+    MIN(selected_date) AS earliest_actionable_selected_date,
+    MAX(selected_date) AS latest_actionable_selected_date
 FROM backtest_selection_outcome
 GROUP BY screen_type;
 
@@ -51,6 +53,31 @@ FROM backtest_selection_outcome
 WHERE latest_price_date < selected_date
    OR high_price_date < selected_date
    OR low_price_date < selected_date;
+
+SELECT COUNT(*) AS bad_confirmation_timing_rows
+FROM backtest_selection_outcome
+WHERE signal_date IS NULL
+   OR f_confirmation_date IS NULL
+   OR f_confirmation_date <= signal_date
+   OR selected_date < f_confirmation_date
+   OR (
+       screen_type = 'A_F'
+       AND (
+           selected_date <> f_confirmation_date
+           OR g_confirmation_date IS NOT NULL
+           OR h_confirmation_date IS NOT NULL
+       )
+   )
+   OR (
+       screen_type = 'A_H'
+       AND (
+           g_confirmation_date IS NULL
+           OR h_confirmation_date IS NULL
+           OR g_confirmation_date < signal_date
+           OR h_confirmation_date <= g_confirmation_date
+           OR selected_date <> h_confirmation_date
+       )
+   );
 
 SELECT COUNT(*) AS bad_price_rows
 FROM backtest_selection_outcome

@@ -35,7 +35,8 @@ def calculate_price_outcomes(
         ),
         summary AS (
             SELECT
-                parameter_set_id, screen_type, selected_date, gvkey, iid,
+                parameter_set_id, screen_type, signal_date, f_confirmation_date,
+                g_confirmation_date, h_confirmation_date, selected_date, gvkey, iid,
                 ticker, company_name, selected_price, selected_adjusted_price,
                 flag_a, flag_b, flag_c, flag_d, flag_e, flag_f, flag_g, flag_h,
                 MAX(price_date) AS latest_price_date,
@@ -59,7 +60,7 @@ def calculate_price_outcomes(
                 THEN (s.low_price / s.selected_price - 1) * 100 END AS max_drawdown_pct,
             '{source_result_path.replace("'", "''")}' AS source_result_path
         FROM summary s
-        JOIN priced p USING (parameter_set_id, screen_type, selected_date, gvkey, iid)
+        JOIN priced p USING (parameter_set_id, screen_type, signal_date, selected_date, gvkey, iid)
         GROUP BY ALL
         """
     )

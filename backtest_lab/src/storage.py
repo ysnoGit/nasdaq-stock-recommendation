@@ -101,6 +101,9 @@ def build_feature_parquets(start_date: date, end_date: date, warmup_days: int) -
             SELECT
                 *,
                 volume / NULLIF(volume_ma30, 0) AS volume_ratio,
+                LEAD(snapshot_date) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_confirmation_date,
+                LEAD(close_price) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_close_price,
+                LEAD(adjusted_close_price) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_adjusted_close_price,
                 LEAD(ma20) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_ma20,
                 LEAD(ma50) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_ma50,
                 LEAD(ma100) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_ma100
@@ -179,6 +182,8 @@ def build_feature_parquets(start_date: date, end_date: date, warmup_days: int) -
         )
         SELECT
             *,
+            LEAD(week_end_date) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_confirmation_date,
+            LEAD(weekly_close_price) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_close_price,
             LEAD(weekly_ma5) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_ma5,
             LEAD(weekly_ma10) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_ma10,
             LEAD(weekly_ma30) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_ma30

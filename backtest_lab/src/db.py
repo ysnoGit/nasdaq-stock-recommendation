@@ -69,7 +69,8 @@ def upsert_parameter_grid(conn, grid: pd.DataFrame) -> pd.DataFrame:
 
 def replace_outcomes(conn, parameter_set_id: int, outcomes: pd.DataFrame) -> None:
     columns = [
-        "parameter_set_id", "screen_type", "selected_date", "gvkey", "iid",
+        "parameter_set_id", "screen_type", "signal_date", "f_confirmation_date",
+        "g_confirmation_date", "h_confirmation_date", "selected_date", "gvkey", "iid",
         "ticker", "company_name", "selected_price", "selected_adjusted_price",
         "latest_price_date", "latest_price", "latest_adjusted_price",
         "high_price", "high_price_date", "low_price", "low_price_date",

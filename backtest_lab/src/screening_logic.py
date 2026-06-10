@@ -14,9 +14,10 @@ from server_pipeline.s3_duckdb import connect_duckdb_with_s3
 
 
 SELECTION_COLUMNS = [
-    "parameter_set_id", "screen_type", "selected_date", "gvkey", "iid", "ticker",
-    "company_name", "selected_price", "selected_adjusted_price", "flag_a", "flag_b",
-    "flag_c", "flag_d", "flag_e", "flag_f", "flag_g", "flag_h",
+    "parameter_set_id", "screen_type", "signal_date", "f_confirmation_date",
+    "g_confirmation_date", "h_confirmation_date", "selected_date", "gvkey", "iid",
+    "ticker", "company_name", "selected_price", "selected_adjusted_price", "flag_a",
+    "flag_b", "flag_c", "flag_d", "flag_e", "flag_f", "flag_g", "flag_h",
 ]
 
 
@@ -96,6 +97,8 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
           AND d.future_daily_ma20 IS NOT NULL
           AND d.future_daily_ma50 IS NOT NULL
           AND d.future_daily_ma100 IS NOT NULL
+          AND d.future_daily_confirmation_date IS NOT NULL
+          AND COALESCE(d.future_daily_adjusted_close_price, d.future_daily_close_price) IS NOT NULL
           AND d.future_daily_ma50 <> 0 AND d.future_daily_ma100 <> 0
           AND d.future_daily_ma20 / d.future_daily_ma50 BETWEEN {1 - daily_tol} AND {1 + daily_tol}
           AND d.future_daily_ma50 / d.future_daily_ma100 BETWEEN {1 - daily_tol} AND {1 + daily_tol}
@@ -149,10 +152,14 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
         SELECT
             {int(p["parameter_set_id"])} AS parameter_set_id,
             'A_F' AS screen_type,
-            snapshot_date AS selected_date,
+            snapshot_date AS signal_date,
+            future_daily_confirmation_date AS f_confirmation_date,
+            NULL::DATE AS g_confirmation_date,
+            NULL::DATE AS h_confirmation_date,
+            future_daily_confirmation_date AS selected_date,
             gvkey, iid, ticker, company_name,
-            COALESCE(adjusted_close_price, close_price) AS selected_price,
-            adjusted_close_price AS selected_adjusted_price,
+            COALESCE(future_daily_adjusted_close_price, future_daily_close_price) AS selected_price,
+            future_daily_adjusted_close_price AS selected_adjusted_price,
             TRUE AS flag_a, TRUE AS flag_b, TRUE AS flag_c, TRUE AS flag_d,
             TRUE AS flag_e, TRUE AS flag_f,
             NULL::BOOLEAN AS flag_g, NULL::BOOLEAN AS flag_h,
@@ -163,18 +170,22 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
         SELECT
             {int(p["parameter_set_id"])} AS parameter_set_id,
             'A_H' AS screen_type,
-            d.snapshot_date AS selected_date,
+            d.snapshot_date AS signal_date,
+            d.future_daily_confirmation_date AS f_confirmation_date,
+            w.week_end_date AS g_confirmation_date,
+            w.future_weekly_confirmation_date AS h_confirmation_date,
+            w.future_weekly_confirmation_date AS selected_date,
             d.gvkey, d.iid, d.ticker, d.company_name,
-            COALESCE(d.adjusted_close_price, d.close_price) AS selected_price,
-            d.adjusted_close_price AS selected_adjusted_price,
+            w.future_weekly_close_price AS selected_price,
+            w.future_weekly_close_price AS selected_adjusted_price,
             TRUE AS flag_a, TRUE AS flag_b, TRUE AS flag_c, TRUE AS flag_d,
             TRUE AS flag_e, TRUE AS flag_f, TRUE AS flag_g, TRUE AS flag_h,
             ROW_NUMBER() OVER (PARTITION BY d.gvkey, d.iid ORDER BY d.snapshot_date) AS rn
         FROM fundamental_candidates d
-        JOIN weekly w
-          ON w.week_end_date = d.snapshot_date
-         AND w.gvkey = d.gvkey
-         AND w.iid = d.iid
+        ASOF JOIN weekly w
+          ON d.gvkey = w.gvkey
+         AND d.iid = w.iid
+         AND d.snapshot_date <= w.week_end_date
         WHERE w.weekly_ma5 IS NOT NULL AND w.weekly_ma10 IS NOT NULL AND w.weekly_ma30 IS NOT NULL
           AND w.weekly_ma10 <> 0 AND w.weekly_ma30 <> 0
           AND w.weekly_ma5 / w.weekly_ma10 BETWEEN {1 - weekly_tol} AND {1 + weekly_tol}
@@ -183,6 +194,8 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
           AND w.future_weekly_ma5 IS NOT NULL
           AND w.future_weekly_ma10 IS NOT NULL
           AND w.future_weekly_ma30 IS NOT NULL
+          AND w.future_weekly_confirmation_date IS NOT NULL
+          AND w.future_weekly_close_price IS NOT NULL
           AND w.future_weekly_ma10 <> 0 AND w.future_weekly_ma30 <> 0
           AND w.future_weekly_ma5 / w.future_weekly_ma10 BETWEEN {1 - weekly_tol} AND {1 + weekly_tol}
           AND w.future_weekly_ma10 / w.future_weekly_ma30 BETWEEN {1 - weekly_tol} AND {1 + weekly_tol}
