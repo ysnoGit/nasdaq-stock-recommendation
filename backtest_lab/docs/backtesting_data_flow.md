@@ -32,7 +32,7 @@ confirmation stage:
 
 - `signal_date`: A-E first pass.
 - `f_confirmation_date`: next trading row used to evaluate F.
-- `g_confirmation_date`: first completed official week on or after the signal,
+- `g_confirmation_date`: first completed official week on or after F confirmation,
   used to evaluate G.
 - `h_confirmation_date`: following completed official week, used to evaluate H.
 - `selected_date`: actionable entry date. It equals `f_confirmation_date` for

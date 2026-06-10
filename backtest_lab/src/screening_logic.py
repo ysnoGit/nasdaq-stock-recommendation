@@ -185,7 +185,7 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
         ASOF JOIN weekly w
           ON d.gvkey = w.gvkey
          AND d.iid = w.iid
-         AND d.snapshot_date <= w.week_end_date
+         AND d.future_daily_confirmation_date <= w.week_end_date
         WHERE w.weekly_ma5 IS NOT NULL AND w.weekly_ma10 IS NOT NULL AND w.weekly_ma30 IS NOT NULL
           AND w.weekly_ma10 <> 0 AND w.weekly_ma30 <> 0
           AND w.weekly_ma5 / w.weekly_ma10 BETWEEN {1 - weekly_tol} AND {1 + weekly_tol}

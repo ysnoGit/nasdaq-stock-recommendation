@@ -73,7 +73,7 @@ WHERE signal_date IS NULL
        AND (
            g_confirmation_date IS NULL
            OR h_confirmation_date IS NULL
-           OR g_confirmation_date < signal_date
+           OR g_confirmation_date < f_confirmation_date
            OR h_confirmation_date <= g_confirmation_date
            OR selected_date <> h_confirmation_date
        )
