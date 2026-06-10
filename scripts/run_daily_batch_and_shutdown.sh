@@ -118,8 +118,8 @@ echo "Running full WRDS + S3 pipeline..."
 python3 server_pipeline/run_full_pipeline.py
 
 echo
-echo "Loading processed features into Supabase..."
-bash scripts/load_processed_features_to_supabase.sh
+echo "Applying serving schema and loading processed features into Supabase..."
+bash scripts/load_processed_features_to_supabase.sh --apply-schema
 
 echo
 echo "Validating Supabase row counts..."

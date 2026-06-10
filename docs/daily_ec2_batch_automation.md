@@ -82,7 +82,7 @@ git pull origin main
 python3 -m compileall server_pipeline
 bash scripts/check_ec2_environment.sh
 python3 server_pipeline/run_full_pipeline.py
-bash scripts/load_processed_features_to_supabase.sh
+bash scripts/load_processed_features_to_supabase.sh --apply-schema
 ```
 
 It then prints Supabase row counts for:

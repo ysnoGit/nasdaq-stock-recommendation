@@ -159,7 +159,9 @@ def add_table(doc, headers, rows, widths, highlight_first=False):
         run.font.size = Pt(8.2)
         run.font.color.rgb = INK
     for row_index, row in enumerate(rows):
-        cells = table.add_row().cells
+        table_row = table.add_row()
+        table_row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+        cells = table_row.cells
         for index, value in enumerate(row):
             cell = cells[index]
             cell.width = Inches(widths[index])
@@ -335,7 +337,7 @@ def build_report(rows: list[dict], output: Path) -> Path:
         add_table(
             doc,
             ["Rank", "Parameter set", "N 6m/1y/2y", "Avg 6m", "Avg 1y", "Avg 2y", "Ranks 6m/1y/2y", "Combined"],
-            [combined_row(index, row) for index, row in enumerate(combined[screen][:15], 1)],
+            [combined_row(index, row) for index, row in enumerate(combined[screen][:10], 1)],
             [0.4, 1.65, 0.85, 0.7, 0.7, 0.7, 1.0, 0.65],
             highlight_first=True,
         )
@@ -351,7 +353,7 @@ def build_report(rows: list[dict], output: Path) -> Path:
                 ["Rank", "Parameter set", "N", "Average", "Median", "Win rate"],
                 [
                     horizon_row(index, row, horizon)
-                    for index, row in enumerate(horizon_rankings[screen][horizon][:12], 1)
+                    for index, row in enumerate(horizon_rankings[screen][horizon][:10], 1)
                 ],
                 [0.45, 2.1, 0.55, 0.85, 0.85, 0.85],
                 highlight_first=True,
