@@ -548,23 +548,32 @@ def main() -> None:
     weekly_ma AS (
         SELECT
             *,
-            AVG(weekly_close_price) OVER (
+            CASE WHEN COUNT(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
                 ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
-            ) AS wma5,
+            ) = 5 THEN AVG(weekly_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY week_end_date
+                ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
+            ) END AS wma5,
 
-            AVG(weekly_close_price) OVER (
+            CASE WHEN COUNT(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
                 ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING
-            ) AS wma10,
+            ) = 10 THEN AVG(weekly_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY week_end_date
+                ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING
+            ) END AS wma10,
 
-            AVG(weekly_close_price) OVER (
+            CASE WHEN COUNT(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
                 ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
-            ) AS wma30
+            ) = 30 THEN AVG(weekly_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY week_end_date
+                ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+            ) END AS wma30
         FROM weekly_bars
     ),
 
@@ -663,13 +672,17 @@ def main() -> None:
                 THEN TRUE ELSE FALSE
             END AS flag_g,
 
-            -- Deprecated helper flag only. The Supabase serving layer calculates
-            -- official H dynamically from future_weekly_* values and user tolerance.
             CASE
                 WHEN w.prev_wma5_wma10_ratio BETWEEN 0.98 AND 1.02
                  AND w.prev_wma5_wma30_ratio BETWEEN 0.98 AND 1.02
                  AND w.prev_wma10_wma30_ratio BETWEEN 0.98 AND 1.02
-                 AND w.prev_wma10 <= w.prev_wma30
+                THEN TRUE ELSE FALSE
+            END AS prev_flag_g,
+
+            -- Deprecated helper flag only. H checks the crossover, independently
+            -- from whether the preceding week passed G.
+            CASE
+                WHEN w.prev_wma10 <= w.prev_wma30
                  AND w.wma10 > w.wma30
                 THEN TRUE ELSE FALSE
             END AS flag_h,

@@ -411,6 +411,8 @@ def build_security_master_rows(daily: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_daily_f_confirmation(daily: pd.DataFrame) -> pd.DataFrame:
+    from server_pipeline.utils.trading_calendar import next_official_trading_dates
+
     confirmation = (
         daily[
             [
@@ -435,9 +437,14 @@ def build_daily_f_confirmation(daily: pd.DataFrame) -> pd.DataFrame:
     confirmation["future_daily_ma50"] = grouped["ma50"].shift(-1)
     confirmation["future_daily_ma100"] = grouped["ma100"].shift(-1)
 
+    next_sessions = next_official_trading_dates(
+        confirmation["snapshot_date"].min(),
+        confirmation["snapshot_date"].max(),
+    )
+    expected_next = confirmation["snapshot_date"].map(next_sessions)
     has_future_row = (
         confirmation["daily_f_confirmed_using_date"].notna()
-        & (confirmation["daily_f_confirmed_using_date"] > confirmation["snapshot_date"])
+        & (confirmation["daily_f_confirmed_using_date"] == expected_next)
     )
     future_columns = [
         "future_daily_close_price",
@@ -468,6 +475,8 @@ def build_daily_f_confirmation(daily: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_weekly_h_confirmation(weekly: pd.DataFrame) -> pd.DataFrame:
+    from server_pipeline.utils.trading_calendar import next_official_week_end_dates
+
     confirmation = (
         weekly[
             [
@@ -490,9 +499,14 @@ def build_weekly_h_confirmation(weekly: pd.DataFrame) -> pd.DataFrame:
     confirmation["future_weekly_ma10"] = grouped["weekly_ma10"].shift(-1)
     confirmation["future_weekly_ma30"] = grouped["weekly_ma30"].shift(-1)
 
+    next_week_ends = next_official_week_end_dates(
+        confirmation["week_end_date"].min(),
+        confirmation["week_end_date"].max(),
+    )
+    expected_next = confirmation["week_end_date"].map(next_week_ends)
     has_future_row = (
         confirmation["weekly_h_confirmed_using_date"].notna()
-        & (confirmation["weekly_h_confirmed_using_date"] > confirmation["week_end_date"])
+        & (confirmation["weekly_h_confirmed_using_date"] == expected_next)
     )
     future_columns = [
         "future_weekly_close_price",

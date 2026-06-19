@@ -23,7 +23,7 @@ HORIZONS = [
     ("1y", "1 year"),
     ("2y", "2 years"),
 ]
-MINIMUMS = {"A_F": 30, "A_H": 15}
+MINIMUMS = {"A_F": 5, "A_H": 1}
 
 INK = RGBColor(11, 37, 69)
 BLUE = RGBColor(46, 116, 181)

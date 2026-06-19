@@ -98,6 +98,9 @@ The processed layer stores reusable feature tables:
 - Daily market indicators and daily helper flags.
 - Weekly market indicators and weekly helper flags.
 - Daily `volume_ratio` history used by the Supabase serving layer for dynamic Condition D checks.
+- Daily MA20/MA50/MA100 and `volume_ratio` are emitted only after their complete
+  input windows exist. Incomplete-window values remain `NULL` and cannot pass
+  dynamic screening.
 
 ### Supabase Serving Layer
 
@@ -147,7 +150,9 @@ raw/compustat_daily_security/year=YYYY/month=MM/date=YYYY-MM-DD/compustat_daily_
 
 `server_pipeline/fundamentals/build_fundamental_growth_history_s3.py` reads the annual and quarterly `latest` raw files from S3.
 
-Annual growth is calculated at `gvkey, fyear` grain. The script uses `COALESCE(sale, revt)` as annual revenue and `oiadp` as annual operating income. It deduplicates annual rows with `ROW_NUMBER() OVER (PARTITION BY gvkey, fyear ORDER BY datadate DESC)` and keeps `rn = 1`. It then calculates year-over-year revenue and operating income growth with `LAG(...)` over each GVKEY ordered by fiscal year.
+Annual growth is calculated at `gvkey, fyear` grain. The script uses `COALESCE(sale, revt)` as annual revenue and `oiadp` as annual operating income. It deduplicates annual rows with `ROW_NUMBER() OVER (PARTITION BY gvkey, fyear ORDER BY datadate DESC)` and keeps `rn = 1`. It calculates year-over-year growth only when the preceding fiscal year is present.
+
+Annual and quarterly growth use the sign-aware improvement formula `(current - previous) / ABS(previous)`. This preserves ordinary percentage growth for positive previous values and gives intuitive results for negative values: shrinking a loss is positive growth, worsening a loss is negative growth, and moving from a loss to a profit is positive growth. Growth remains null when the previous value is exactly zero or either required value is missing.
 
 Quarterly growth is calculated at `gvkey, fyearq, fqtr` grain. The script uses `COALESCE(saleq, revtq)` as quarterly revenue and `oiadpq` as quarterly operating income. It deduplicates by `gvkey, fyearq, fqtr`, then joins each quarter to the same quarter in the prior fiscal year.
 
@@ -173,6 +178,11 @@ Daily metrics are calculated at `gvkey, iid, date` grain. The script deduplicate
 - `daily_ma_cluster_ratio`
 - helper `flag_e`
 - helper `flag_f`
+
+MA20, MA50, and MA100 remain `NULL` until their complete 20-, 50-, and
+100-valid-price windows exist. `volume_ma30` and `volume_ratio` remain `NULL`
+until exactly 30 valid prior-volume rows exist. Downstream screening therefore
+excludes incomplete-window securities without deleting their feature rows.
 
 The output is partitioned by trading date:
 

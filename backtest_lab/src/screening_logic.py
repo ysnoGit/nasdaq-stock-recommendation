@@ -99,10 +99,8 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
           AND d.future_daily_ma100 IS NOT NULL
           AND d.future_daily_confirmation_date IS NOT NULL
           AND COALESCE(d.future_daily_adjusted_close_price, d.future_daily_close_price) IS NOT NULL
-          AND d.future_daily_ma50 <> 0 AND d.future_daily_ma100 <> 0
-          AND d.future_daily_ma20 / d.future_daily_ma50 BETWEEN {1 - daily_tol} AND {1 + daily_tol}
-          AND d.future_daily_ma50 / d.future_daily_ma100 BETWEEN {1 - daily_tol} AND {1 + daily_tol}
-          AND d.future_daily_ma20 / d.future_daily_ma100 BETWEEN {1 - daily_tol} AND {1 + daily_tol}
+          AND d.ma20 <= d.ma50
+          AND d.future_daily_ma20 > d.future_daily_ma50
     ),
     fundamental_candidates AS (
         SELECT d.*
@@ -174,10 +172,21 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
             d.future_daily_confirmation_date AS f_confirmation_date,
             w.week_end_date AS g_confirmation_date,
             w.future_weekly_confirmation_date AS h_confirmation_date,
-            w.future_weekly_confirmation_date AS selected_date,
+            GREATEST(
+                d.future_daily_confirmation_date,
+                w.future_weekly_confirmation_date
+            ) AS selected_date,
             d.gvkey, d.iid, d.ticker, d.company_name,
-            w.future_weekly_close_price AS selected_price,
-            w.future_weekly_close_price AS selected_adjusted_price,
+            CASE
+                WHEN d.future_daily_confirmation_date > w.future_weekly_confirmation_date
+                    THEN COALESCE(d.future_daily_adjusted_close_price, d.future_daily_close_price)
+                ELSE w.future_weekly_close_price
+            END AS selected_price,
+            CASE
+                WHEN d.future_daily_confirmation_date > w.future_weekly_confirmation_date
+                    THEN d.future_daily_adjusted_close_price
+                ELSE w.future_weekly_close_price
+            END AS selected_adjusted_price,
             TRUE AS flag_a, TRUE AS flag_b, TRUE AS flag_c, TRUE AS flag_d,
             TRUE AS flag_e, TRUE AS flag_f, TRUE AS flag_g, TRUE AS flag_h,
             ROW_NUMBER() OVER (PARTITION BY d.gvkey, d.iid ORDER BY d.snapshot_date) AS rn
@@ -185,7 +194,7 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
         ASOF JOIN weekly w
           ON d.gvkey = w.gvkey
          AND d.iid = w.iid
-         AND d.future_daily_confirmation_date <= w.week_end_date
+         AND d.snapshot_date <= w.week_end_date
         WHERE w.weekly_ma5 IS NOT NULL AND w.weekly_ma10 IS NOT NULL AND w.weekly_ma30 IS NOT NULL
           AND w.weekly_ma10 <> 0 AND w.weekly_ma30 <> 0
           AND w.weekly_ma5 / w.weekly_ma10 BETWEEN {1 - weekly_tol} AND {1 + weekly_tol}
@@ -196,10 +205,8 @@ def evaluate_parameter(con: duckdb.DuckDBPyConnection, parameter: dict) -> duckd
           AND w.future_weekly_ma30 IS NOT NULL
           AND w.future_weekly_confirmation_date IS NOT NULL
           AND w.future_weekly_close_price IS NOT NULL
-          AND w.future_weekly_ma10 <> 0 AND w.future_weekly_ma30 <> 0
-          AND w.future_weekly_ma5 / w.future_weekly_ma10 BETWEEN {1 - weekly_tol} AND {1 + weekly_tol}
-          AND w.future_weekly_ma10 / w.future_weekly_ma30 BETWEEN {1 - weekly_tol} AND {1 + weekly_tol}
-          AND w.future_weekly_ma5 / w.future_weekly_ma30 BETWEEN {1 - weekly_tol} AND {1 + weekly_tol}
+          AND w.weekly_ma10 <= w.weekly_ma30
+          AND w.future_weekly_ma10 > w.future_weekly_ma30
     )
     SELECT {", ".join(SELECTION_COLUMNS)} FROM af WHERE rn = 1
     UNION ALL

@@ -197,20 +197,12 @@ def run_sample_query(cur, label: str, params: dict[str, Any], include_weekly: bo
         END AS flag_g,
         CASE
             WHEN w.weekly_h_confirmed_using_date IS NULL
-              OR w.future_weekly_ma5 IS NULL
               OR w.future_weekly_ma10 IS NULL
               OR w.future_weekly_ma30 IS NULL
             THEN NULL
-            WHEN w.future_weekly_ma10 = 0
-              OR w.future_weekly_ma30 = 0
-            THEN FALSE
             ELSE (
-                w.future_weekly_ma5 / w.future_weekly_ma10
-                    BETWEEN %(weekly_ma_lower_bound)s AND %(weekly_ma_upper_bound)s
-                AND w.future_weekly_ma10 / w.future_weekly_ma30
-                    BETWEEN %(weekly_ma_lower_bound)s AND %(weekly_ma_upper_bound)s
-                AND w.future_weekly_ma5 / w.future_weekly_ma30
-                    BETWEEN %(weekly_ma_lower_bound)s AND %(weekly_ma_upper_bound)s
+                w.weekly_ma10 <= w.weekly_ma30
+                AND w.future_weekly_ma10 > w.future_weekly_ma30
             )
         END AS flag_h,
         w.weekly_h_confirmed_using_date,
@@ -307,18 +299,10 @@ def run_sample_query(cur, label: str, params: dict[str, Any], include_weekly: bo
             WHEN d.daily_f_confirmed_using_date IS NULL
               OR d.future_daily_ma20 IS NULL
               OR d.future_daily_ma50 IS NULL
-              OR d.future_daily_ma100 IS NULL
             THEN NULL
-            WHEN d.future_daily_ma50 = 0
-              OR d.future_daily_ma100 = 0
-            THEN FALSE
             ELSE (
-                d.future_daily_ma20 / d.future_daily_ma50
-                    BETWEEN %(daily_ma_lower_bound)s AND %(daily_ma_upper_bound)s
-                AND d.future_daily_ma50 / d.future_daily_ma100
-                    BETWEEN %(daily_ma_lower_bound)s AND %(daily_ma_upper_bound)s
-                AND d.future_daily_ma20 / d.future_daily_ma100
-                    BETWEEN %(daily_ma_lower_bound)s AND %(daily_ma_upper_bound)s
+                d.ma20 <= d.ma50
+                AND d.future_daily_ma20 > d.future_daily_ma50
             )
         END AS flag_f,
         d.daily_f_confirmed_using_date,

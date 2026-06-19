@@ -48,6 +48,46 @@ def official_week_end_trading_dates(
     return week_end_by_start
 
 
+def next_official_week_end_dates(
+    start_date: date | str | pd.Timestamp,
+    end_date: date | str | pd.Timestamp,
+) -> dict[date, date]:
+    start = week_start_for_date(start_date)
+    end = week_start_for_date(end_date)
+    week_ends = official_week_end_trading_dates(start, end + timedelta(days=14))
+    ordered = [week_ends[key] for key in sorted(week_ends)]
+    return {
+        week_end: ordered[index + 1]
+        for index, week_end in enumerate(ordered[:-1])
+        if start <= week_start_for_date(week_end) <= end
+    }
+
+
+def official_trading_sessions(
+    start_date: date | str | pd.Timestamp,
+    end_date: date | str | pd.Timestamp,
+) -> list[date]:
+    sessions = get_us_equity_calendar().sessions_in_range(
+        pd.Timestamp(start_date),
+        pd.Timestamp(end_date),
+    )
+    return [pd.Timestamp(session).date() for session in sessions]
+
+
+def next_official_trading_dates(
+    start_date: date | str | pd.Timestamp,
+    end_date: date | str | pd.Timestamp,
+) -> dict[date, date]:
+    start = pd.Timestamp(start_date).date()
+    end = pd.Timestamp(end_date).date()
+    sessions = official_trading_sessions(start, end + timedelta(days=10))
+    return {
+        session: sessions[index + 1]
+        for index, session in enumerate(sessions[:-1])
+        if start <= session <= end
+    }
+
+
 def official_week_end_trading_date(week_start_date: date | str | pd.Timestamp) -> date | None:
     week_start = week_start_for_date(week_start_date)
     return official_week_end_trading_dates(week_start, week_start).get(week_start)

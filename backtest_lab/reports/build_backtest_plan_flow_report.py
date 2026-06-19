@@ -128,8 +128,8 @@ def configure_document(doc: Document) -> None:
     for list_name in ["List Bullet", "List Number"]:
         style = doc.styles[list_name]
         style.font.name = "Calibri"
-        style.font.size = Pt(10.5)
-        style.paragraph_format.space_after = Pt(5)
+        style.font.size = Pt(10)
+        style.paragraph_format.space_after = Pt(4)
         style.paragraph_format.line_spacing = 1.1
     for name, size, color in [
         ("Heading 1", 16, BLUE),
@@ -185,7 +185,7 @@ def build_report() -> Path:
     add_numbered(
         doc,
         "Find A-F and A-H selections",
-        "Evaluate every parameter set from January 1, 2022. A-F becomes actionable after the next-day F confirmation; A-H becomes actionable after G and the following completed-week H confirmation.",
+        "Evaluate every parameter set from January 1, 2022. A-F becomes actionable after MA20 crosses above MA50 on the next trading day. For A-H, G is anchored to the E signal week, H confirms WMA10 crossing above WMA30 on the following completed week, and entry waits until both F and H are observable.",
     )
     add_numbered(
         doc,
@@ -208,14 +208,14 @@ def build_report() -> Path:
         doc,
         ["Parameter", "Choices", "Condition"],
         [
-            ["Annual growth threshold", "2%, 3%", "A"],
-            ["Quarterly growth threshold", "2%, 3%", "B"],
+            ["Annual growth threshold", "5%, 10%", "A"],
+            ["Quarterly growth threshold", "5%, 10%", "B"],
             ["Annual periods", "2, 3 years", "A"],
             ["Quarterly periods", "2, 3, 4 quarters", "B"],
             ["Volume-ratio threshold", "2x, 3x, 4x, 5x", "C / D"],
             ["Volume-surge minimum days", "2, 3 days", "D"],
-            ["Daily MA tolerance", "1% fixed", "E / F"],
-            ["Weekly MA tolerance", "2% fixed", "G / H"],
+            ["Daily MA tolerance", "1% fixed", "E"],
+            ["Weekly MA tolerance", "2% fixed", "G"],
         ],
         [2.25, 2.4, 1.2],
     )
@@ -235,11 +235,11 @@ def build_report() -> Path:
         ["Stage", "A-F", "A-H"],
         [
             ["A-E signal", "Daily signal date", "Daily signal date"],
-            ["F confirmation", "Next trading row", "Next trading row"],
-            ["G confirmation", "Not required", "First completed official week on/after F"],
-            ["H confirmation", "Not required", "Following completed official week"],
-            ["Actionable selected date", "F confirmation date", "H confirmation date"],
-            ["Entry price", "F-confirmation adjusted close fallback", "H-confirmation weekly close"],
+            ["F confirmation", "Next row: MA20 crosses above MA50", "Next row: MA20 crosses above MA50"],
+            ["G confirmation", "Not required", "First completed official week ending on/after E"],
+            ["H confirmation", "Not required", "Following week: WMA10 crosses above WMA30"],
+            ["Actionable selected date", "F confirmation date", "Later of F and H confirmation"],
+            ["Entry price", "F-confirmation adjusted close fallback", "Price matching the actionable date"],
         ],
         [1.8, 2.15, 2.35],
     )
@@ -285,14 +285,15 @@ def build_report() -> Path:
         doc,
         ["Screen", "Selections", "Unique securities", "6m complete", "1y complete", "2y complete"],
         [
-            ["A-F", "3,698", "92", "3,364", "3,050", "2,436"],
-            ["A-H", "1,928", "47", "1,748", "1,576", "1,292"],
+            ["A-F", "304", "14", "286", "250", "218"],
+            ["A-H", "20", "1", "20", "0", "0"],
         ],
         [0.75, 1.0, 1.2, 1.0, 1.0, 1.0],
     )
     doc.add_paragraph(
-        "All 192 parameter sets produced stored outcomes for both screens. Validation reported zero missing core price outcomes, "
-        "zero confirmation-timing errors, zero inconsistent fixed-horizon rows, and zero invalid horizon dates."
+        "All 192 parameter sets were evaluated; 100 produced A-F outcomes and 20 produced A-H outcomes. Validation reported "
+        "zero missing core price outcomes, zero confirmation-timing errors, zero inconsistent fixed-horizon rows, and zero "
+        "invalid horizon dates. A-H currently has no completed 1-year or 2-year outcomes."
     )
 
     add_heading(doc, "What This Backtest Answers")
@@ -302,9 +303,9 @@ def build_report() -> Path:
 
     add_heading(doc, "What It Does Not Yet Prove")
     add_bullet(doc, "A higher rank does not prove statistically significant superiority because parameter sets often reuse the same securities and dates.")
-    add_bullet(doc, "The current design does not simulate repeated entries, portfolio sizing, transaction costs, or overlapping-position capital constraints.")
+    add_bullet(doc, "The design does not simulate repeated entries, portfolio sizing, transaction costs, or overlapping capital.")
     add_bullet(doc, "Fundamentals use datadate <= signal date because filing/publication availability dates are not present; this reduces but does not fully remove look-ahead risk.")
-    add_bullet(doc, "Fixed-horizon outcomes describe hypothetical holding periods, not an implemented exit strategy.")
+    add_bullet(doc, "Fixed-horizon outcomes are hypothetical holding periods, not an exit strategy.")
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     doc.save(OUTPUT)

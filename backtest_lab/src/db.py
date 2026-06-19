@@ -67,6 +67,11 @@ def upsert_parameter_grid(conn, grid: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=names)
 
 
+def reset_parameter_grid(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE backtest_selection_outcome, backtest_parameter_set RESTART IDENTITY")
+
+
 def replace_outcomes(conn, parameter_set_id: int, outcomes: pd.DataFrame) -> None:
     columns = [
         "parameter_set_id", "screen_type", "signal_date", "f_confirmation_date",

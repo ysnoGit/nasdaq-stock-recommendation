@@ -149,6 +149,7 @@ def main() -> None:
             d.ma50,
             d.ma100,
             d.flag_e,
+            d.prev_flag_e,
             d.flag_f,
             ld.screening_date
         FROM read_parquet('{DAILY_PATH}') AS d
@@ -217,6 +218,7 @@ def main() -> None:
             END AS daily_ma_cluster_ratio,
 
             d.flag_e,
+            d.prev_flag_e,
             d.flag_f
         FROM latest_daily AS d
         LEFT JOIN volume_counts AS v
@@ -255,6 +257,7 @@ def main() -> None:
             END AS weekly_ma_cluster_ratio,
 
             w.flag_g,
+            w.prev_flag_g,
             w.flag_h
         FROM read_parquet('{WEEKLY_PATH}') AS w
         CROSS JOIN latest_week_date AS lwd
@@ -379,6 +382,7 @@ def main() -> None:
             d.ma100,
             d.daily_ma_cluster_ratio,
             d.flag_e,
+            d.prev_flag_e,
             d.flag_f,
 
             -- G/H.
@@ -390,6 +394,7 @@ def main() -> None:
             w.wma30,
             w.weekly_ma_cluster_ratio,
             COALESCE(w.flag_g, FALSE) AS flag_g,
+            COALESCE(w.prev_flag_g, FALSE) AS prev_flag_g,
             COALESCE(w.flag_h, FALSE) AS flag_h,
 
             -- A.
@@ -429,7 +434,9 @@ def main() -> None:
                  AND COALESCE(b.flag_b, FALSE)
                  AND d.flag_c
                  AND d.flag_d
+                 AND d.prev_flag_e
                  AND d.flag_f
+                 AND COALESCE(w.prev_flag_g, FALSE)
                  AND COALESCE(w.flag_h, FALSE)
                 THEN TRUE ELSE FALSE
             END AS flag_all,

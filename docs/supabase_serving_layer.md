@@ -103,19 +103,30 @@ Conditions A-H should be evaluated dynamically:
 | C | `security_daily_feature_snapshot.volume_ratio`, using the selected snapshot date and configurable `volume_ratio_threshold`. |
 | D | Three months of `security_daily_feature_snapshot.volume_ratio` history with configurable `volume_ratio_threshold` and `volume_surge_min_days`. |
 | E | `security_daily_feature_snapshot.ma20`, `ma50`, `ma100`, using configurable `daily_ma_tolerance_pct`. |
-| F | `future_daily_ma20`, `future_daily_ma50`, `future_daily_ma100`, using configurable `daily_ma_tolerance_pct`. |
+| F | Current `ma20`, `ma50` plus `future_daily_ma20`, `future_daily_ma50`; verifies the complete below-to-above crossover. |
 | G | `security_weekly_feature_snapshot.weekly_ma5`, `weekly_ma10`, `weekly_ma30`, using configurable `weekly_ma_tolerance_pct`. |
-| H | `future_weekly_ma5`, `future_weekly_ma10`, `future_weekly_ma30`, using configurable `weekly_ma_tolerance_pct`. |
+| H | Current `weekly_ma10`, `weekly_ma30` plus `future_weekly_ma10`, `future_weekly_ma30`; verifies the complete below-to-above crossover. |
 
 For weekly rows, `week_end_date` means the official final U.S. exchange trading session of that calendar week. It is usually Friday, but it can be Thursday or another earlier session when Friday is a market holiday. The pipeline uses the `exchange_calendars` U.S. equities calendar, preferring XNAS/NASDAQ when available, instead of hardcoded weekday logic.
 
 Stored F/H future-input fields preserve future-data semantics:
 
 - `daily_f_confirmed_using_date` must be greater than `snapshot_date`.
-- `future_daily_ma20`, `future_daily_ma50`, and `future_daily_ma100` come from the next trading row for the same `gvkey, iid`.
+- `future_daily_ma20`, `future_daily_ma50`, and `future_daily_ma100` come only
+  from the row for the same `gvkey, iid` on the immediately following official
+  market session. A later row is not substituted when that row is missing.
 - `weekly_h_confirmed_using_date` must be greater than `week_end_date`.
 - `future_weekly_ma5`, `future_weekly_ma10`, and `future_weekly_ma30` come from the next completed weekly row for the same `gvkey, iid`.
 - `NULL` means the future confirmation row does not exist yet, not that the condition failed.
+
+Daily feature-window eligibility also uses `NULL` deliberately:
+
+- MA20, MA50, and MA100 remain `NULL` until complete 20-, 50-, and
+  100-valid-price windows exist.
+- `volume_ma30` and `volume_ratio` remain `NULL` until exactly 30 valid prior
+  volume rows exist.
+- A security with an incomplete required window is not yet eligible for the
+  corresponding condition; it should not be treated as a failed condition.
 
 Deprecated `daily_f_confirmation_pass` and `weekly_h_confirmation_pass` columns in the old mixed table should not be used as final screening truth because F/H depend on user-selected tolerance values. Screening queries should compute F/H dynamically from the future input columns.
 

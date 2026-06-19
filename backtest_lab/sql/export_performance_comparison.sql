@@ -7,8 +7,8 @@ SELECT
     p.quarter_count,
     p.volume_ratio_threshold,
     p.volume_surge_min_days,
-    o.screen_type,
-    COUNT(*) AS sample_size,
+    screens.screen_type,
+    COUNT(o.parameter_set_id) AS sample_size,
     COUNT(o.return_6m_pct) AS sample_size_6m,
     ROUND(AVG(o.return_6m_pct), 2) AS avg_return_6m_pct,
     ROUND(
@@ -50,7 +50,10 @@ SELECT
     MIN(o.selected_date) AS earliest_entry_date,
     MAX(o.selected_date) AS latest_entry_date
 FROM backtest_parameter_set p
-JOIN backtest_selection_outcome o USING (parameter_set_id)
+CROSS JOIN (VALUES ('A_F'), ('A_H')) AS screens(screen_type)
+LEFT JOIN backtest_selection_outcome o
+    ON o.parameter_set_id = p.parameter_set_id
+    AND o.screen_type = screens.screen_type
 GROUP BY
     p.parameter_set_id,
     p.parameter_set_name,
@@ -60,5 +63,5 @@ GROUP BY
     p.quarter_count,
     p.volume_ratio_threshold,
     p.volume_surge_min_days,
-    o.screen_type
-ORDER BY o.screen_type, sample_size DESC, p.parameter_set_id;
+    screens.screen_type
+ORDER BY screens.screen_type, sample_size DESC, p.parameter_set_id;

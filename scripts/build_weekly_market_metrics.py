@@ -91,23 +91,32 @@ def main() -> None:
     weekly_ma AS (
         SELECT
             *,
-            AVG(weekly_close_price) OVER (
+            CASE WHEN COUNT(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
-                ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
-            ) AS wma5,
+                ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
+            ) = 5 THEN AVG(weekly_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY week_end_date
+                ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
+            ) END AS wma5,
 
-            AVG(weekly_close_price) OVER (
+            CASE WHEN COUNT(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
-                ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
-            ) AS wma10,
+                ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING
+            ) = 10 THEN AVG(weekly_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY week_end_date
+                ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING
+            ) END AS wma10,
 
-            AVG(weekly_close_price) OVER (
+            CASE WHEN COUNT(weekly_close_price) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY week_end_date
-                ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
-            ) AS wma30
+                ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+            ) = 30 THEN AVG(weekly_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY week_end_date
+                ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+            ) END AS wma30
         FROM weekly_close
     ),
 
@@ -150,8 +159,7 @@ def main() -> None:
     SELECT
         *,
         CASE
-            WHEN prev_flag_g = TRUE
-             AND prev_wma10 <= prev_wma30
+            WHEN prev_wma10 <= prev_wma30
              AND wma10 > wma30
             THEN TRUE ELSE FALSE
         END AS flag_h,

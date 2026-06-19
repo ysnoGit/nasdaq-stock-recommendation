@@ -12,6 +12,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from server_pipeline.config import S3_BUCKET, RAW_DAILY_PREFIX, DAILY_MARKET_METRICS_PREFIX
 from server_pipeline.s3_duckdb import connect_duckdb_with_s3
+from server_pipeline.utils.trading_calendar import next_official_trading_dates
 
 
 def list_raw_objects():
@@ -191,6 +192,14 @@ def main() -> None:
     latest_date_sql = latest_date.strftime("%Y-%m-%d")
 
     con = connect_duckdb_with_s3()
+    next_sessions = next_official_trading_dates(warmup_start_date, latest_date)
+    daily_calendar_df = pd.DataFrame(
+        [
+            {"session_date": session, "next_session_date": next_session}
+            for session, next_session in next_sessions.items()
+        ]
+    )
+    con.register("daily_calendar_df", daily_calendar_df)
 
     query = f"""
     WITH raw_input AS (
@@ -236,7 +245,6 @@ def main() -> None:
         SELECT *
         FROM raw_clean
         WHERE adjusted_close_price IS NOT NULL
-          AND volume IS NOT NULL
     ),
 
     dedup AS (
@@ -256,30 +264,58 @@ def main() -> None:
     indicators AS (
         SELECT
             *,
-            AVG(adjusted_close_price) OVER (
-                PARTITION BY gvkey, iid
-                ORDER BY date
-                ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
-            ) AS ma20,
+            CASE
+                WHEN COUNT(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid
+                    ORDER BY date
+                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                ) = 20
+                THEN AVG(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid
+                    ORDER BY date
+                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                )
+            END AS ma20,
 
-            AVG(adjusted_close_price) OVER (
-                PARTITION BY gvkey, iid
-                ORDER BY date
-                ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
-            ) AS ma50,
+            CASE
+                WHEN COUNT(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid
+                    ORDER BY date
+                    ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
+                ) = 50
+                THEN AVG(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid
+                    ORDER BY date
+                    ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
+                )
+            END AS ma50,
 
-            AVG(adjusted_close_price) OVER (
-                PARTITION BY gvkey, iid
-                ORDER BY date
-                ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
-            ) AS ma100,
+            CASE
+                WHEN COUNT(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid
+                    ORDER BY date
+                    ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
+                ) = 100
+                THEN AVG(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid
+                    ORDER BY date
+                    ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
+                )
+            END AS ma100,
 
             -- Current day's volume is excluded from volume_ma30.
-            AVG(volume) OVER (
-                PARTITION BY gvkey, iid
-                ORDER BY date
-                ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
-            ) AS volume_ma30
+            CASE
+                WHEN COUNT(volume) OVER (
+                    PARTITION BY gvkey, iid
+                    ORDER BY date
+                    ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+                ) = 30
+                THEN AVG(volume) OVER (
+                    PARTITION BY gvkey, iid
+                    ORDER BY date
+                    ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+                )
+            END AS volume_ma30
         FROM dedup
     ),
 
@@ -308,6 +344,11 @@ def main() -> None:
     with_previous AS (
         SELECT
             *,
+            LAG(date) OVER (
+                PARTITION BY gvkey, iid
+                ORDER BY date
+            ) AS prev_date,
+
             LAG(ma20) OVER (
                 PARTITION BY gvkey, iid
                 ORDER BY date
@@ -338,6 +379,14 @@ def main() -> None:
                 ORDER BY date
             ) AS prev_ma50_ma100_ratio
         FROM metrics
+    ),
+
+    with_next_session AS (
+        SELECT
+            w.*,
+            c.next_session_date AS expected_confirmation_date
+        FROM with_previous w
+        LEFT JOIN daily_calendar_df c ON w.prev_date = c.session_date
     ),
 
     final AS (
@@ -381,6 +430,8 @@ def main() -> None:
             prev_ma20_ma50_ratio,
             prev_ma20_ma100_ratio,
             prev_ma50_ma100_ratio,
+            prev_date,
+            expected_confirmation_date,
 
             -- Helper flag only. Backend can recalculate official E dynamically.
             CASE
@@ -390,20 +441,25 @@ def main() -> None:
                 THEN TRUE ELSE FALSE
             END AS flag_e,
 
-            -- Deprecated helper flag only. The Supabase serving layer calculates
-            -- official F dynamically from future_daily_* values and user tolerance.
             CASE
                 WHEN prev_ma20_ma50_ratio BETWEEN 0.99 AND 1.01
                  AND prev_ma20_ma100_ratio BETWEEN 0.99 AND 1.01
                  AND prev_ma50_ma100_ratio BETWEEN 0.99 AND 1.01
-                 AND prev_ma20 <= prev_ma50
+                THEN TRUE ELSE FALSE
+            END AS prev_flag_e,
+
+            -- Deprecated helper flag only. F checks the crossover, independently
+            -- from whether the preceding row passed E.
+            CASE
+                WHEN prev_ma20 <= prev_ma50
                  AND ma20 > ma50
+                 AND date = expected_confirmation_date
                 THEN TRUE ELSE FALSE
             END AS flag_f,
 
             TIMESTAMP '{created_at}' AS created_at
 
-        FROM with_previous
+        FROM with_next_session
         WHERE date IN ({target_date_sql})
     )
 
@@ -420,6 +476,11 @@ def main() -> None:
     print(f"Unique tickers: {df['ticker'].nunique():,}")
     print(f"Date range: {df['date'].min()} to {df['date'].max()}")
     print(f"Duplicate gvkey-iid-date: {df.duplicated(['gvkey', 'iid', 'date']).sum():,}")
+    print(f"Rows with complete MA20 window: {int(df['ma20'].notna().sum()):,}")
+    print(f"Rows with complete MA50 window: {int(df['ma50'].notna().sum()):,}")
+    print(f"Rows with complete MA100 window: {int(df['ma100'].notna().sum()):,}")
+    print(f"Rows with complete prior-volume-30 window: {int(df['volume_ma30'].notna().sum()):,}")
+    print(f"Rows with valid volume ratio: {int(df['volume_ratio'].notna().sum()):,}")
     print(f"flag_e count: {int(df['flag_e'].sum())}")
     print(f"flag_f count: {int(df['flag_f'].sum())}")
 

@@ -47,6 +47,28 @@ def parse_log(log_path: Path) -> tuple[pd.DataFrame, dict]:
     df = pd.DataFrame(pattern.findall(text), columns=columns)
     numeric = [column for column in columns if column != "screen_type"]
     df[numeric] = df[numeric].apply(pd.to_numeric)
+    no_result_pattern = re.compile(
+        r"\((\d+), Decimal\('([\d.]+)'\), Decimal\('([\d.]+)'\), "
+        r"(\d+), (\d+), Decimal\('([\d.]+)'\), (\d+), Decimal\('([\d.]+)'\), "
+        r"Decimal\('([\d.]+)'\), None, 0\)"
+    )
+    no_result_columns = columns[:-2]
+    no_result_df = pd.DataFrame(no_result_pattern.findall(text), columns=no_result_columns)
+    no_result_df[no_result_columns] = no_result_df[no_result_columns].apply(pd.to_numeric)
+
+    parameter_columns = columns[:-2]
+    parameters = pd.concat(
+        [df[parameter_columns], no_result_df[parameter_columns]],
+        ignore_index=True,
+    ).drop_duplicates("parameter_set_id")
+    screens = pd.DataFrame({"screen_type": ["A_F", "A_H"]})
+    complete = parameters.merge(screens, how="cross")
+    df = complete.merge(
+        df,
+        on=parameter_columns + ["screen_type"],
+        how="left",
+    )
+    df["selected_stock_count"] = df["selected_stock_count"].fillna(0).astype(int)
 
     causal_summary_pattern = re.compile(
         r"\('([A-Z_]+)', (\d+), (\d+), (\d+), datetime\.date\((\d+), (\d+), (\d+)\), "
@@ -79,7 +101,7 @@ def parse_log(log_path: Path) -> tuple[pd.DataFrame, dict]:
                 "earliest_entry": "not available",
                 "latest_entry": "not available",
             }
-    if df.empty or set(screen_summary) != {"A_F", "A_H"}:
+    if len(parameters) != 192 or set(screen_summary) != {"A_F", "A_H"}:
         raise ValueError(f"Could not parse complete A-F/A-H results from {log_path}")
     return df, screen_summary
 
@@ -299,14 +321,14 @@ def build_report(df: pd.DataFrame, screen_summary: dict) -> None:
         "moving-average tolerances remain fixed across every parameter set.",
     )
     parameter_rows = [
-        ["Annual growth %", "A", "2%, 3%", "Selectable", "Minimum annual revenue and operating-income growth."],
-        ["Quarterly growth %", "B", "2%, 3%", "Selectable", "Minimum quarterly revenue and operating-income growth."],
+        ["Annual growth %", "A", "5%, 10%", "Selectable", "Minimum annual revenue and operating-income growth."],
+        ["Quarterly growth %", "B", "5%, 10%", "Selectable", "Minimum quarterly revenue and operating-income growth."],
         ["Annual periods", "A", "2, 3 years", "Selectable", "Number of latest annual periods that must pass."],
         ["Quarterly periods", "B", "2, 3, 4 quarters", "Selectable", "Number of latest quarterly periods that must pass."],
         ["Volume ratio", "C / D", "2x, 3x, 4x, 5x", "Selectable", "Required volume-surge multiple."],
         ["Volume surge days", "D", "2, 3 days", "Selectable", "Minimum surge days in the recent-volume window."],
-        ["Daily MA tolerance", "E / F", "1%", "Fixed", "Allowed daily MA20/MA50/MA100 alignment tolerance."],
-        ["Weekly MA tolerance", "G / H", "2%", "Fixed", "Allowed weekly MA5/MA10/MA30 alignment tolerance."],
+        ["Daily MA tolerance", "E", "1%", "Fixed", "Allowed daily MA20/MA50/MA100 alignment tolerance."],
+        ["Weekly MA tolerance", "G", "2%", "Fixed", "Allowed weekly MA5/MA10/MA30 alignment tolerance."],
     ]
     add_table(
         doc,

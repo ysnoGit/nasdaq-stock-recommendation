@@ -8,7 +8,11 @@ import pandas as pd
 from backtest_lab.src.config import DAILY_FEATURE_PATH, WEEKLY_FEATURE_PATH
 from server_pipeline.daily.build_daily_market_metrics_s3 import list_raw_objects, parse_raw_files
 from server_pipeline.s3_duckdb import connect_duckdb_with_s3
-from server_pipeline.utils.trading_calendar import official_week_end_trading_dates
+from server_pipeline.utils.trading_calendar import (
+    next_official_trading_dates,
+    next_official_week_end_dates,
+    official_week_end_trading_dates,
+)
 
 
 def sql_path(path: Path) -> str:
@@ -40,6 +44,14 @@ def build_feature_parquets(start_date: date, end_date: date, warmup_days: int) -
     print(f"Feature window: {start_date} to {end_date}; warm-up starts {warmup_start}")
 
     con = connect_duckdb_with_s3()
+    next_sessions = next_official_trading_dates(warmup_start, end_date)
+    daily_calendar_df = pd.DataFrame(
+        [
+            {"session_date": session, "next_session_date": next_session}
+            for session, next_session in next_sessions.items()
+        ]
+    )
+    con.register("daily_calendar_df", daily_calendar_df)
     daily_query = f"""
     COPY (
         WITH raw_input AS (
@@ -72,42 +84,80 @@ def build_feature_parquets(start_date: date, end_date: date, warmup_days: int) -
                     PARTITION BY snapshot_date, gvkey, iid ORDER BY snapshot_date
                 ) AS rn
                 FROM clean
-                WHERE adjusted_close_price IS NOT NULL AND volume IS NOT NULL
+                WHERE adjusted_close_price IS NOT NULL
             )
             WHERE rn = 1
         ),
         metrics AS (
             SELECT
                 *,
-                AVG(adjusted_close_price) OVER (
+                CASE WHEN COUNT(adjusted_close_price) OVER (
                     PARTITION BY gvkey, iid ORDER BY snapshot_date
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
-                ) AS ma20,
-                AVG(adjusted_close_price) OVER (
+                ) = 20 THEN AVG(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid ORDER BY snapshot_date
+                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                ) END AS ma20,
+                CASE WHEN COUNT(adjusted_close_price) OVER (
                     PARTITION BY gvkey, iid ORDER BY snapshot_date
                     ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
-                ) AS ma50,
-                AVG(adjusted_close_price) OVER (
+                ) = 50 THEN AVG(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid ORDER BY snapshot_date
+                    ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
+                ) END AS ma50,
+                CASE WHEN COUNT(adjusted_close_price) OVER (
                     PARTITION BY gvkey, iid ORDER BY snapshot_date
                     ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
-                ) AS ma100,
-                AVG(volume) OVER (
+                ) = 100 THEN AVG(adjusted_close_price) OVER (
+                    PARTITION BY gvkey, iid ORDER BY snapshot_date
+                    ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
+                ) END AS ma100,
+                CASE WHEN COUNT(volume) OVER (
                     PARTITION BY gvkey, iid ORDER BY snapshot_date
                     ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
-                ) AS volume_ma30
+                ) = 30 THEN AVG(volume) OVER (
+                    PARTITION BY gvkey, iid ORDER BY snapshot_date
+                    ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+                ) END AS volume_ma30
             FROM dedup
         ),
-        future AS (
+        future_raw AS (
             SELECT
-                *,
-                volume / NULLIF(volume_ma30, 0) AS volume_ratio,
+                m.*,
+                c.next_session_date AS expected_next_session_date,
                 LEAD(snapshot_date) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_confirmation_date,
                 LEAD(close_price) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_close_price,
                 LEAD(adjusted_close_price) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_adjusted_close_price,
                 LEAD(ma20) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_ma20,
                 LEAD(ma50) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_ma50,
                 LEAD(ma100) OVER (PARTITION BY gvkey, iid ORDER BY snapshot_date) AS future_daily_ma100
-            FROM metrics
+            FROM metrics m
+            LEFT JOIN daily_calendar_df c ON m.snapshot_date = c.session_date
+        ),
+        future AS (
+            SELECT
+                * EXCLUDE (
+                    future_daily_confirmation_date,
+                    future_daily_close_price,
+                    future_daily_adjusted_close_price,
+                    future_daily_ma20,
+                    future_daily_ma50,
+                    future_daily_ma100
+                ),
+                volume / NULLIF(volume_ma30, 0) AS volume_ratio,
+                CASE WHEN future_daily_confirmation_date = expected_next_session_date
+                    THEN future_daily_confirmation_date END AS future_daily_confirmation_date,
+                CASE WHEN future_daily_confirmation_date = expected_next_session_date
+                    THEN future_daily_close_price END AS future_daily_close_price,
+                CASE WHEN future_daily_confirmation_date = expected_next_session_date
+                    THEN future_daily_adjusted_close_price END AS future_daily_adjusted_close_price,
+                CASE WHEN future_daily_confirmation_date = expected_next_session_date
+                    THEN future_daily_ma20 END AS future_daily_ma20,
+                CASE WHEN future_daily_confirmation_date = expected_next_session_date
+                    THEN future_daily_ma50 END AS future_daily_ma50,
+                CASE WHEN future_daily_confirmation_date = expected_next_session_date
+                    THEN future_daily_ma100 END AS future_daily_ma100
+            FROM future_raw
         )
         SELECT *
         FROM future
@@ -131,6 +181,14 @@ def build_feature_parquets(start_date: date, end_date: date, warmup_days: int) -
         [{"week_start_date": week_start, "official_week_end_date": week_end} for week_start, week_end in calendar.items()]
     )
     con.register("calendar_df", calendar_df)
+    next_week_ends = next_official_week_end_dates(start_date, end_date)
+    weekly_confirmation_calendar_df = pd.DataFrame(
+        [
+            {"week_end_date": week_end, "expected_next_week_end_date": next_week_end}
+            for week_end, next_week_end in next_week_ends.items()
+        ]
+    )
+    con.register("weekly_confirmation_calendar_df", weekly_confirmation_calendar_df)
     weekly_query = f"""
     COPY (
         WITH base AS (
@@ -166,28 +224,57 @@ def build_feature_parquets(start_date: date, end_date: date, warmup_days: int) -
         moving AS (
             SELECT
                 *,
-                AVG(weekly_close_price) OVER (
+                CASE WHEN COUNT(weekly_close_price) OVER (
                     PARTITION BY gvkey, iid ORDER BY week_end_date
                     ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
-                ) AS weekly_ma5,
-                AVG(weekly_close_price) OVER (
+                ) = 5 THEN AVG(weekly_close_price) OVER (
+                    PARTITION BY gvkey, iid ORDER BY week_end_date
+                    ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
+                ) END AS weekly_ma5,
+                CASE WHEN COUNT(weekly_close_price) OVER (
                     PARTITION BY gvkey, iid ORDER BY week_end_date
                     ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING
-                ) AS weekly_ma10,
-                AVG(weekly_close_price) OVER (
+                ) = 10 THEN AVG(weekly_close_price) OVER (
+                    PARTITION BY gvkey, iid ORDER BY week_end_date
+                    ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING
+                ) END AS weekly_ma10,
+                CASE WHEN COUNT(weekly_close_price) OVER (
                     PARTITION BY gvkey, iid ORDER BY week_end_date
                     ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
-                ) AS weekly_ma30
+                ) = 30 THEN AVG(weekly_close_price) OVER (
+                    PARTITION BY gvkey, iid ORDER BY week_end_date
+                    ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+                ) END AS weekly_ma30
             FROM bars
+        ),
+        future_raw AS (
+            SELECT
+                m.*,
+                c.expected_next_week_end_date,
+                LEAD(week_end_date) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS next_security_week_end_date,
+                LEAD(weekly_close_price) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS next_weekly_close_price,
+                LEAD(weekly_ma5) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS next_weekly_ma5,
+                LEAD(weekly_ma10) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS next_weekly_ma10,
+                LEAD(weekly_ma30) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS next_weekly_ma30
+            FROM moving m
+            LEFT JOIN weekly_confirmation_calendar_df c USING (week_end_date)
         )
         SELECT
-            *,
-            LEAD(week_end_date) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_confirmation_date,
-            LEAD(weekly_close_price) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_close_price,
-            LEAD(weekly_ma5) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_ma5,
-            LEAD(weekly_ma10) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_ma10,
-            LEAD(weekly_ma30) OVER (PARTITION BY gvkey, iid ORDER BY week_end_date) AS future_weekly_ma30
-        FROM moving
+            * EXCLUDE (
+                next_security_week_end_date, next_weekly_close_price,
+                next_weekly_ma5, next_weekly_ma10, next_weekly_ma30
+            ),
+            CASE WHEN next_security_week_end_date = expected_next_week_end_date
+                THEN next_security_week_end_date END AS future_weekly_confirmation_date,
+            CASE WHEN next_security_week_end_date = expected_next_week_end_date
+                THEN next_weekly_close_price END AS future_weekly_close_price,
+            CASE WHEN next_security_week_end_date = expected_next_week_end_date
+                THEN next_weekly_ma5 END AS future_weekly_ma5,
+            CASE WHEN next_security_week_end_date = expected_next_week_end_date
+                THEN next_weekly_ma10 END AS future_weekly_ma10,
+            CASE WHEN next_security_week_end_date = expected_next_week_end_date
+                THEN next_weekly_ma30 END AS future_weekly_ma30
+        FROM future_raw
     ) TO '{sql_path(WEEKLY_FEATURE_PATH)}' (FORMAT PARQUET, COMPRESSION ZSTD)
     """
     con.execute(weekly_query)

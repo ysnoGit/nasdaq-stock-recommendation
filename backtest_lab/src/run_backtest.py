@@ -22,6 +22,7 @@ from backtest_lab.src.config import (  # noqa: E402
 from backtest_lab.src.db import (  # noqa: E402
     connect_supabase,
     execute_sql_file,
+    reset_parameter_grid,
     replace_outcomes,
     upsert_parameter_grid,
 )
@@ -70,6 +71,11 @@ def main() -> None:
     parser.add_argument("--end-date", default=DEFAULT_END_DATE)
     parser.add_argument("--warmup-calendar-days", type=int, default=WARMUP_CALENDAR_DAYS)
     parser.add_argument("--apply-schema", action="store_true")
+    parser.add_argument(
+        "--replace-parameter-grid",
+        action="store_true",
+        help="Delete prior backtest parameter sets and outcomes before inserting the current grid.",
+    )
     parser.add_argument("--parameter-set-id", type=int, help="Process one parameter set for debugging.")
     args = parser.parse_args()
 
@@ -85,6 +91,10 @@ def main() -> None:
     with connect_supabase() as conn:
         if args.apply_schema:
             execute_sql_file(conn, ROOT / "sql" / "create_backtest_tables.sql")
+        if args.replace_parameter_grid:
+            if args.parameter_set_id:
+                raise RuntimeError("--replace-parameter-grid cannot be used with --parameter-set-id.")
+            reset_parameter_grid(conn)
         parameters = upsert_parameter_grid(conn, grid)
         if args.parameter_set_id:
             parameters = parameters[parameters["parameter_set_id"] == args.parameter_set_id].copy()

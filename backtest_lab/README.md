@@ -12,10 +12,16 @@ Large daily and weekly feature data stays on EC2 as compressed Parquet under `ba
 
 The runner deletes prior generated files under `backtest_lab/tmp/` at the start of every run. It never deletes production S3 data or automatically drops Supabase tables.
 
+Daily MA20/MA50/MA100 and `volume_ratio` remain `NULL` until their complete
+20/50/100-price and 30-prior-volume windows exist. Securities with incomplete
+windows are not eligible for the corresponding conditions.
+
 `backtest_selection_outcome.selected_date` is the actionable confirmation date,
 not the original A-E signal date. A-F entries begin on the next trading row used
-to confirm F. A-H entries begin on the following completed weekly row used to
-confirm H. Separate `signal_date`, `f_confirmation_date`,
+to confirm the MA20-above-MA50 crossover for F. For A-H, G is anchored to the
+first completed official week ending on or after the A-E signal date, H confirms
+the WMA10-above-WMA30 crossover on the following completed week, and entry
+begins once both F and H are observable. Separate `signal_date`, `f_confirmation_date`,
 `g_confirmation_date`, and `h_confirmation_date` columns preserve the timing
 audit trail.
 
@@ -28,8 +34,8 @@ not yet reached a horizon keeps that horizon's date, price, and return null.
 
 | Parameter | Choices |
 | --- | --- |
-| `annual_growth_pct` | 2, 3 |
-| `quarterly_growth_pct` | 2, 3 |
+| `annual_growth_pct` | 5, 10 |
+| `quarterly_growth_pct` | 5, 10 |
 | `annual_years` | 2, 3 |
 | `quarter_count` | 2, 3, 4 |
 | `volume_ratio_threshold` | 2, 3, 4, 5 |

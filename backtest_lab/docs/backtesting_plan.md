@@ -9,10 +9,10 @@ Selections use causal confirmation timing:
 - `signal_date` is the daily row where A-E first pass.
 - A-F becomes actionable on `f_confirmation_date`, the next trading row. Its
   `selected_date`, entry price, and return measurement begin on that date.
-- For A-H, the confirmed A-F signal is carried forward to the first completed
-  official trading week on or after `f_confirmation_date` for G. H uses the following completed
-  weekly row. Its `selected_date`, entry price, and return measurement begin on
-  `h_confirmation_date`.
+- For A-H, G uses the first completed official trading week ending on or after
+  `signal_date`, independently of the next-trading-day F path. H uses the
+  following completed weekly row. Its `selected_date`, entry price, and return
+  measurement begin when both F and H are observable.
 - A-H does not require A-E to pass again on the G confirmation week end.
 
 For each parameter set, screen type, and security, retain only the first signal
@@ -25,11 +25,15 @@ from the actionable `selected_date` through the latest available date.
 - B: latest valid quarterly rows meet the selected quarterly threshold for the selected number of quarters.
 - C: selected-date volume ratio meets the threshold.
 - D: enough threshold-meeting volume-ratio days exist in the trailing three months.
-- E/F: current and next-daily MA20/MA50/MA100 ratios are within 1%.
-- G/H: current and next-weekly MA5/MA10/MA30 ratios are within 2%.
+- E: current daily MA20/MA50/MA100 ratios are within 1%.
+- F: MA20 is at/below MA50 on E and crosses above MA50 on the next trading
+  row.
+- G: current weekly MA5/MA10/MA30 ratios are within 2%.
+- H: WMA10 is at/below WMA30 on G and crosses above WMA30 on the following
+  completed official weekly row.
 - A-H evaluates G at the first completed official weekly end on or after the
-  F confirmation date, then evaluates H using the following completed
-  official weekly row.
+  E signal date, then evaluates H using the following completed official
+  weekly row.
 
 Null future values do not pass F or H.
 
@@ -45,6 +49,7 @@ availability dates.
 
 Price outcome uses adjusted close when available and falls back to close. A-F
 uses the F-confirmation daily close as its entry price. A-H uses the
+later of the F- and H-confirmation dates as its entry date, normally using the
 H-confirmation weekly close as its entry price. It records latest, high, low,
 earliest high/low dates, total return, maximum return, drawdown, and trading-day
 count beginning on the actionable selection date.

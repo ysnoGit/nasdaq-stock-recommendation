@@ -33,7 +33,7 @@ class CausalTimingTest(unittest.TestCase):
                 (
                     date(2026, 5, 26), "1", "01", "TEST", "Test Company",
                     100, 100, 3, 100, 100, 100,
-                    date(2026, 5, 27), 105, 105, 100, 100, 100,
+                    date(2026, 5, 27), 105, 105, 101, 100, 100,
                 ),
                 (
                     date(2026, 5, 27), "1", "01", "TEST", "Test Company",
@@ -67,7 +67,7 @@ class CausalTimingTest(unittest.TestCase):
             """
             INSERT INTO weekly VALUES
             ('2026-05-29', '1', '01', 108, 100, 100, 100,
-             '2026-06-05', 120, 100, 100, 100)
+             '2026-06-05', 120, 100, 101, 100)
             """
         )
         con.execute(
@@ -225,7 +225,7 @@ class CausalTimingTest(unittest.TestCase):
             self.assertAlmostEqual(outcome["return_1y_pct"], 20.0)
             self.assertAlmostEqual(outcome["return_2y_pct"], 50.0)
 
-    def test_g_confirmation_cannot_precede_f_confirmation(self):
+    def test_friday_signal_uses_same_day_completed_week_for_g(self):
         con = duckdb.connect()
         con.execute(
             """
@@ -245,7 +245,7 @@ class CausalTimingTest(unittest.TestCase):
             """
             INSERT INTO daily VALUES
             ('2026-05-29', '1', '01', 'TEST', 'Test Company', 100, 100, 3,
-             100, 100, 100, '2026-06-01', 101, 101, 100, 100, 100)
+             100, 100, 100, '2026-06-01', 101, 101, 101, 100, 100)
             """
         )
         con.execute(
@@ -263,7 +263,7 @@ class CausalTimingTest(unittest.TestCase):
             """
             INSERT INTO weekly VALUES
             ('2026-05-29', '1', '01', 100, 100, 100, 100,
-             '2026-06-05', 110, 100, 100, 100),
+             '2026-06-05', 110, 100, 101, 100),
             ('2026-06-05', '1', '01', 110, 100, 100, 100,
              '2026-06-12', 120, 100, 100, 100)
             """
@@ -308,8 +308,91 @@ class CausalTimingTest(unittest.TestCase):
         rows = evaluate_parameter(con, parameter).filter("screen_type = 'A_H'").fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][3], date(2026, 6, 1))
-        self.assertEqual(rows[0][4], date(2026, 6, 5))
-        self.assertEqual(rows[0][5], date(2026, 6, 12))
+        self.assertEqual(rows[0][4], date(2026, 5, 29))
+        self.assertEqual(rows[0][5], date(2026, 6, 5))
+        self.assertEqual(rows[0][6], date(2026, 6, 5))
+        self.assertEqual(rows[0][11], 110.0)
+
+    def test_clustered_future_rows_without_crossovers_do_not_confirm_f_or_h(self):
+        con = duckdb.connect()
+        con.execute(
+            """
+            CREATE TABLE daily (
+                snapshot_date DATE, gvkey VARCHAR, iid VARCHAR, ticker VARCHAR,
+                company_name VARCHAR, close_price DOUBLE, adjusted_close_price DOUBLE,
+                volume_ratio DOUBLE, ma20 DOUBLE, ma50 DOUBLE, ma100 DOUBLE,
+                future_daily_confirmation_date DATE,
+                future_daily_close_price DOUBLE,
+                future_daily_adjusted_close_price DOUBLE,
+                future_daily_ma20 DOUBLE, future_daily_ma50 DOUBLE,
+                future_daily_ma100 DOUBLE
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO daily VALUES
+            ('2026-05-27', '1', '01', 'TEST', 'Test Company', 100, 100, 3,
+             100, 100, 100, '2026-05-28', 101, 101, 100, 100, 100)
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE weekly (
+                week_end_date DATE, gvkey VARCHAR, iid VARCHAR,
+                weekly_close_price DOUBLE, weekly_ma5 DOUBLE, weekly_ma10 DOUBLE,
+                weekly_ma30 DOUBLE, future_weekly_confirmation_date DATE,
+                future_weekly_close_price DOUBLE, future_weekly_ma5 DOUBLE,
+                future_weekly_ma10 DOUBLE, future_weekly_ma30 DOUBLE
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO weekly VALUES
+            ('2026-05-29', '1', '01', 102, 100, 100, 100,
+             '2026-06-05', 103, 100, 100, 100)
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE annual (
+                gvkey VARCHAR, datadate DATE, annual_revenue_growth DOUBLE,
+                annual_operating_income_growth DOUBLE
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO annual VALUES
+            ('1', '2025-12-31', 0.10, 0.10),
+            ('1', '2024-12-31', 0.10, 0.10)
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE quarterly (
+                gvkey VARCHAR, datadate DATE, quarterly_revenue_growth DOUBLE,
+                quarterly_operating_income_growth DOUBLE
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO quarterly VALUES
+            ('1', '2026-03-31', 0.10, 0.10),
+            ('1', '2025-12-31', 0.10, 0.10)
+            """
+        )
+        parameter = {
+            "parameter_set_id": 2, "start_date": date(2026, 5, 27),
+            "end_date": date(2026, 6, 5), "annual_growth_pct": 2,
+            "quarterly_growth_pct": 2, "annual_years": 2, "quarter_count": 2,
+            "volume_ratio_threshold": 2, "volume_surge_min_days": 1,
+            "daily_ma_tolerance_pct": 1, "weekly_ma_tolerance_pct": 2,
+        }
+
+        self.assertEqual(evaluate_parameter(con, parameter).fetchall(), [])
 
 
 if __name__ == "__main__":

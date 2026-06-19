@@ -5,8 +5,8 @@ from itertools import product
 import pandas as pd
 
 
-ANNUAL_GROWTH_PCT = [2, 3]
-QUARTERLY_GROWTH_PCT = [2, 3]
+ANNUAL_GROWTH_PCT = [5, 10]
+QUARTERLY_GROWTH_PCT = [5, 10]
 ANNUAL_YEARS = [2, 3]
 QUARTER_COUNTS = [2, 3, 4]
 VOLUME_RATIO_THRESHOLDS = [2, 3, 4, 5]

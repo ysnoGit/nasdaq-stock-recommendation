@@ -4,7 +4,10 @@ import os
 
 import boto3
 import duckdb
+import pandas as pd
 from dotenv import load_dotenv
+
+from server_pipeline.utils.trading_calendar import next_official_trading_dates
 
 
 load_dotenv()
@@ -64,6 +67,17 @@ def main() -> None:
 
     con = duckdb.connect()
     created_at = datetime.now(timezone.utc).isoformat()
+    min_date, max_date = con.execute(
+        f"SELECT MIN(CAST(date AS DATE)), MAX(CAST(date AS DATE)) FROM read_parquet({raw_files})"
+    ).fetchone()
+    next_sessions = next_official_trading_dates(min_date, max_date)
+    daily_calendar_df = pd.DataFrame(
+        [
+            {"session_date": session, "next_session_date": next_session}
+            for session, next_session in next_sessions.items()
+        ]
+    )
+    con.register("daily_calendar_df", daily_calendar_df)
 
     query = f"""
     WITH raw_input AS (
@@ -102,7 +116,6 @@ def main() -> None:
             END AS adjusted_close_price
         FROM raw_input
         WHERE adjusted_close_price IS NOT NULL
-          AND volume IS NOT NULL
     ),
 
     dedup AS (
@@ -122,30 +135,38 @@ def main() -> None:
     indicators AS (
         SELECT
             *,
-            AVG(adjusted_close_price) OVER (
-                PARTITION BY gvkey, iid
-                ORDER BY date
+            CASE WHEN COUNT(adjusted_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY date
                 ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
-            ) AS ma20,
+            ) = 20 THEN AVG(adjusted_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY date
+                ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+            ) END AS ma20,
 
-            AVG(adjusted_close_price) OVER (
-                PARTITION BY gvkey, iid
-                ORDER BY date
+            CASE WHEN COUNT(adjusted_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY date
                 ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
-            ) AS ma50,
+            ) = 50 THEN AVG(adjusted_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY date
+                ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
+            ) END AS ma50,
 
-            AVG(adjusted_close_price) OVER (
-                PARTITION BY gvkey, iid
-                ORDER BY date
+            CASE WHEN COUNT(adjusted_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY date
                 ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
-            ) AS ma100,
+            ) = 100 THEN AVG(adjusted_close_price) OVER (
+                PARTITION BY gvkey, iid ORDER BY date
+                ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
+            ) END AS ma100,
 
             -- Current day's volume is excluded.
-            AVG(volume) OVER (
-                PARTITION BY gvkey, iid
-                ORDER BY date
+            CASE WHEN COUNT(volume) OVER (
+                PARTITION BY gvkey, iid ORDER BY date
                 ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
-            ) AS volume_ma30
+            ) = 30 THEN AVG(volume) OVER (
+                PARTITION BY gvkey, iid ORDER BY date
+                ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+            ) END AS volume_ma30
         FROM dedup
     ),
 
@@ -185,6 +206,11 @@ def main() -> None:
                 ORDER BY date
             ) AS prev_ma50,
 
+            LAG(date) OVER (
+                PARTITION BY gvkey, iid
+                ORDER BY date
+            ) AS prev_date,
+
             LAG(
                 CASE
                     WHEN daily_ma_cluster_ratio <= 0.01
@@ -195,6 +221,14 @@ def main() -> None:
                 ORDER BY date
             ) AS prev_flag_e
         FROM metrics
+    ),
+
+    with_confirmation_date AS (
+        SELECT
+            f.*,
+            c.next_session_date AS expected_confirmation_date
+        FROM flags f
+        LEFT JOIN daily_calendar_df c ON f.prev_date = c.session_date
     )
 
     SELECT
@@ -223,17 +257,18 @@ def main() -> None:
         volume_ma30,
         volume_ratio,
         flag_e,
+        prev_flag_e,
 
         CASE
-            WHEN prev_flag_e = TRUE
-             AND prev_ma20 <= prev_ma50
+            WHEN prev_ma20 <= prev_ma50
              AND ma20 > ma50
+             AND date = expected_confirmation_date
             THEN TRUE ELSE FALSE
         END AS flag_f,
 
         TIMESTAMP '{created_at}' AS created_at
 
-    FROM flags
+    FROM with_confirmation_date
     ORDER BY gvkey, iid, date
     """
 
@@ -242,6 +277,11 @@ def main() -> None:
     print(f"Output rows: {len(df):,}")
     print(f"Unique tickers: {df['ticker'].nunique():,}")
     print(f"Date range: {df['date'].min()} to {df['date'].max()}")
+    print(f"Rows with complete MA20 window: {int(df['ma20'].notna().sum()):,}")
+    print(f"Rows with complete MA50 window: {int(df['ma50'].notna().sum()):,}")
+    print(f"Rows with complete MA100 window: {int(df['ma100'].notna().sum()):,}")
+    print(f"Rows with complete prior-volume-30 window: {int(df['volume_ma30'].notna().sum()):,}")
+    print(f"Rows with valid volume ratio: {int(df['volume_ratio'].notna().sum()):,}")
 
     df.to_parquet(OUTPUT_FILE, index=False)
 

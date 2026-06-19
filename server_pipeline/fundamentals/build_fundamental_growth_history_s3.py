@@ -65,6 +65,11 @@ def build_annual_growth_history(con, annual_input_path: str, created_at: str) ->
     annual_with_lag AS (
         SELECT
             *,
+            LAG(fyear) OVER (
+                PARTITION BY gvkey
+                ORDER BY fyear
+            ) AS prev_annual_fyear,
+
             LAG(annual_revenue) OVER (
                 PARTITION BY gvkey
                 ORDER BY fyear
@@ -88,22 +93,27 @@ def build_annual_growth_history(con, annual_input_path: str, created_at: str) ->
             exchange_code,
             annual_revenue,
             annual_operating_income,
+            prev_annual_fyear,
             prev_annual_revenue,
             prev_annual_operating_income,
 
             CASE
-                WHEN prev_annual_revenue > 0
+                WHEN prev_annual_fyear = fyear - 1
+                 AND prev_annual_revenue <> 0
                  AND annual_revenue IS NOT NULL
-                THEN (annual_revenue - prev_annual_revenue) / prev_annual_revenue
+                THEN
+                    (annual_revenue - prev_annual_revenue)
+                    / ABS(prev_annual_revenue)
                 ELSE NULL
             END AS annual_revenue_growth_yoy,
 
             CASE
-                WHEN prev_annual_operating_income > 0
+                WHEN prev_annual_fyear = fyear - 1
+                 AND prev_annual_operating_income <> 0
                  AND annual_operating_income IS NOT NULL
                 THEN
                     (annual_operating_income - prev_annual_operating_income)
-                    / prev_annual_operating_income
+                    / ABS(prev_annual_operating_income)
                 ELSE NULL
             END AS annual_operating_income_growth_yoy
         FROM annual_with_lag
@@ -192,23 +202,23 @@ def build_quarterly_growth_history(con, quarterly_input_path: str, created_at: s
             prev.quarterly_operating_income AS prev_year_same_quarter_operating_income,
 
             CASE
-                WHEN prev.quarterly_revenue > 0
+                WHEN prev.quarterly_revenue <> 0
                  AND cur.quarterly_revenue IS NOT NULL
                 THEN
                     (cur.quarterly_revenue - prev.quarterly_revenue)
-                    / prev.quarterly_revenue
+                    / ABS(prev.quarterly_revenue)
                 ELSE NULL
             END AS quarterly_revenue_growth_yoy,
 
             CASE
-                WHEN prev.quarterly_operating_income > 0
+                WHEN prev.quarterly_operating_income <> 0
                  AND cur.quarterly_operating_income IS NOT NULL
                 THEN
                     (
                         cur.quarterly_operating_income
                         - prev.quarterly_operating_income
                     )
-                    / prev.quarterly_operating_income
+                    / ABS(prev.quarterly_operating_income)
                 ELSE NULL
             END AS quarterly_operating_income_growth_yoy
 
