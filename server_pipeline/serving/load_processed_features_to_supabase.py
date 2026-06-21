@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 import os
 from pathlib import Path
@@ -22,7 +22,11 @@ from server_pipeline.config import (  # noqa: E402
     QUARTERLY_GROWTH_HISTORY_PREFIX,
     WEEKLY_MARKET_METRICS_PREFIX,
 )
-from server_pipeline.utils.trading_calendar import official_week_end_trading_date  # noqa: E402
+from server_pipeline.utils.trading_calendar import (  # noqa: E402
+    official_week_end_trading_date,
+    official_trading_sessions,
+    week_start_for_date,
+)
 from server_pipeline.utils.universe_filter import add_universe_filter_columns  # noqa: E402
 
 
@@ -34,6 +38,11 @@ QUARTERLY_GROWTH_S3_PATH = (
     f"s3://{S3_BUCKET}/{QUARTERLY_GROWTH_HISTORY_PREFIX}/"
     "quarterly_fundamental_growth_history.parquet"
 )
+
+DEFAULT_SERVING_HISTORY_START_DATE = date(2024, 6, 3)
+DEFAULT_INSPECTION_TRADING_DAYS = 15
+DEFAULT_WEEKLY_LOOKBACK_WEEKS = 36
+UPSERT_BATCH_SIZE = 5_000
 
 
 def require_supabase_db_url() -> str:
@@ -152,6 +161,21 @@ def apply_schema(conn) -> None:
         cur.execute(sql_text)
 
 
+def recreate_serving_schema(conn) -> None:
+    recreate_path = (
+        Path(__file__).resolve().parents[2]
+        / "sql"
+        / "recreate_supabase_serving_tables.sql"
+    )
+    with recreate_path.open("r", encoding="utf-8") as handle:
+        drop_sql = handle.read()
+
+    print("Dropping production serving tables only; backtest tables are untouched...")
+    with conn.cursor() as cur:
+        cur.execute(drop_sql)
+    apply_schema(conn)
+
+
 def table_count(conn, table: str) -> int:
     with conn.cursor() as cur:
         cur.execute(f"SELECT COUNT(*) FROM {table}")
@@ -183,6 +207,8 @@ def required_tables_for_load(only: str | None) -> list[str]:
         ]
     if only == "security-master":
         return ["security_master"]
+    if only == "company-master":
+        return ["company_master"]
     if only == "daily":
         return ["security_daily_feature_snapshot"]
     if only == "weekly":
@@ -193,6 +219,7 @@ def required_tables_for_load(only: str | None) -> list[str]:
         return ["quarterly_growth_history"]
     return [
         "security_master",
+        "company_master",
         "security_daily_feature_snapshot",
         "security_weekly_feature_snapshot",
         "annual_growth_history",
@@ -221,7 +248,6 @@ def upsert_dataframe(
         raise RuntimeError(f"Missing columns for {table}: {missing}")
 
     insert_columns = ", ".join(columns)
-    placeholders = ", ".join(["%s"] * len(columns))
     conflict_target = ", ".join(conflict_columns)
     update_columns = [
         column
@@ -233,19 +259,70 @@ def upsert_dataframe(
         for column in update_columns
     )
 
-    sql = f"""
-        INSERT INTO {table} ({insert_columns})
-        VALUES ({placeholders})
-        ON CONFLICT ({conflict_target})
-        DO UPDATE SET {update_clause}
-    """
-
-    records = normalize_records(df[columns])
+    staging_table = f"serving_load_{table}"
     with conn.cursor() as cur:
-        cur.executemany(sql, records)
+        cur.execute(f"DROP TABLE IF EXISTS {staging_table}")
+        cur.execute(
+            f"CREATE TEMP TABLE {staging_table} "
+            f"(LIKE {table} INCLUDING DEFAULTS) ON COMMIT DROP"
+        )
+        copy_sql = f"COPY {staging_table} ({insert_columns}) FROM STDIN"
+        copied_rows = 0
+        for offset in range(0, len(df), UPSERT_BATCH_SIZE):
+            batch = df.iloc[offset : offset + UPSERT_BATCH_SIZE]
+            with cur.copy(copy_sql) as copy:
+                for record in normalize_records(batch[columns]):
+                    copy.write_row(record)
+            copied_rows += len(batch)
+            print(
+                f"Staged {table}: {copied_rows:,}/{len(df):,} rows"
+            )
+        cur.execute(
+            f"""
+            INSERT INTO {table} ({insert_columns})
+            SELECT {insert_columns}
+            FROM {staging_table}
+            WHERE true
+            ON CONFLICT ({conflict_target})
+            DO UPDATE SET {update_clause}
+            """
+        )
+        print(f"Merged staged rows into {table}: {cur.rowcount:,}")
 
 
-def latest_daily_window(paths: list[dict[str, Any]], lookback_months: int) -> list[dict[str, Any]]:
+def copy_dataframe(
+    conn,
+    table: str,
+    df: pd.DataFrame,
+    columns: list[str],
+) -> None:
+    if df.empty:
+        raise RuntimeError(f"No rows to load into {table}.")
+
+    missing = [column for column in columns if column not in df.columns]
+    if missing:
+        raise RuntimeError(f"Missing columns for {table}: {missing}")
+
+    insert_columns = ", ".join(columns)
+    copy_sql = f"COPY {table} ({insert_columns}) FROM STDIN"
+    copied_rows = 0
+    next_progress = 100_000
+    with conn.cursor() as cur:
+        with cur.copy(copy_sql) as copy:
+            for offset in range(0, len(df), UPSERT_BATCH_SIZE):
+                batch = df.iloc[offset : offset + UPSERT_BATCH_SIZE]
+                for record in normalize_records(batch[columns]):
+                    copy.write_row(record)
+                copied_rows += len(batch)
+                if copied_rows >= next_progress or copied_rows == len(df):
+                    print(f"Copied {table}: {copied_rows:,}/{len(df):,} rows")
+                    next_progress += 100_000
+
+
+def daily_history_window(
+    paths: list[dict[str, Any]],
+    history_start_date: date,
+) -> list[dict[str, Any]]:
     if not paths:
         raise RuntimeError(
             f"No daily metric partitions found under s3://{S3_BUCKET}/{DAILY_MARKET_METRICS_PREFIX}/"
@@ -255,16 +332,44 @@ def latest_daily_window(paths: list[dict[str, Any]], lookback_months: int) -> li
         item["date_value"] = pd.to_datetime(item["date"]).date()
 
     latest_date = max(item["date_value"] for item in paths)
-    cutoff = (pd.Timestamp(latest_date) - pd.DateOffset(months=lookback_months)).date()
-    selected = [item for item in paths if cutoff <= item["date_value"] <= latest_date]
+    selected = [
+        item
+        for item in paths
+        if history_start_date <= item["date_value"] <= latest_date
+    ]
 
     if not selected:
-        raise RuntimeError("No daily metric partitions selected for security_daily_feature_snapshot.")
+        raise RuntimeError(
+            "No daily metric partitions selected for "
+            f"security_daily_feature_snapshot on or after {history_start_date}."
+        )
 
     print(f"Daily metric latest date: {latest_date}")
-    print(f"Daily metric lookback start: {cutoff}")
+    print(f"Daily serving history start: {history_start_date}")
     print(f"Daily metric partitions selected: {len(selected):,}")
     return selected
+
+
+def rolling_daily_history_start(
+    latest_daily_date: date,
+    lookback_months: int,
+    inspection_trading_days: int,
+) -> tuple[date, date]:
+    calendar_days = max(60, inspection_trading_days * 3)
+    sessions = official_trading_sessions(
+        latest_daily_date - timedelta(days=calendar_days),
+        latest_daily_date,
+    )
+    if len(sessions) < inspection_trading_days:
+        raise RuntimeError(
+            f"Only {len(sessions)} official sessions are available; "
+            f"cannot prepare {inspection_trading_days} inspection trading days."
+        )
+    inspection_start_date = sessions[-inspection_trading_days]
+    history_start_date = (
+        pd.Timestamp(inspection_start_date) - pd.DateOffset(months=lookback_months)
+    ).date()
+    return history_start_date, inspection_start_date
 
 
 def build_annual_rows() -> pd.DataFrame:
@@ -344,6 +449,51 @@ def build_quarterly_rows() -> pd.DataFrame:
             "updated_at": now,
         }
     )
+    return out
+
+
+def build_company_master_rows() -> pd.DataFrame:
+    annual = read_s3_parquet(ANNUAL_GROWTH_S3_PATH)
+    quarterly = read_s3_parquet(QUARTERLY_GROWTH_S3_PATH)
+    required = ["gvkey", "datadate", "ticker", "company_name", "exchange_code"]
+    for label, frame in (("annual", annual), ("quarterly", quarterly)):
+        missing = [column for column in required if column not in frame.columns]
+        if missing:
+            raise RuntimeError(
+                f"{label.title()} growth parquet missing company identity columns: {missing}"
+            )
+
+    annual_identity = annual[required].copy()
+    annual_identity["source_s3_path"] = ANNUAL_GROWTH_S3_PATH
+    quarterly_identity = quarterly[required].copy()
+    quarterly_identity["source_s3_path"] = QUARTERLY_GROWTH_S3_PATH
+    identity = pd.concat([annual_identity, quarterly_identity], ignore_index=True)
+    identity = identity.dropna(subset=["gvkey", "datadate"])
+    identity["gvkey"] = identity["gvkey"].astype(str)
+    identity["datadate"] = pd.to_datetime(identity["datadate"]).dt.date
+
+    latest = (
+        identity.sort_values(["gvkey", "datadate", "source_s3_path"])
+        .groupby("gvkey", as_index=False, dropna=False)
+        .tail(1)
+        .rename(columns={"datadate": "latest_fundamental_date"})
+    )
+    latest["updated_at"] = datetime.now(timezone.utc)
+    out = latest[
+        [
+            "gvkey",
+            "ticker",
+            "company_name",
+            "exchange_code",
+            "latest_fundamental_date",
+            "source_s3_path",
+            "updated_at",
+        ]
+    ].copy()
+    duplicates = out.duplicated(["gvkey"]).sum()
+    if duplicates:
+        raise RuntimeError(f"company_master build produced duplicate GVKEYs: {duplicates:,}")
+    print(f"Company master rows built from full fundamental history: {len(out):,}")
     return out
 
 
@@ -632,8 +782,49 @@ def validate_weekly_future_fields(df: pd.DataFrame) -> None:
     )
 
 
-def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    daily_paths = latest_daily_window(list_daily_metric_paths(), lookback_months)
+def build_security_serving_rows(
+    lookback_months: int,
+    history_start_date: date | None,
+    inspection_trading_days: int = DEFAULT_INSPECTION_TRADING_DAYS,
+    weekly_lookback_weeks: int = DEFAULT_WEEKLY_LOOKBACK_WEEKS,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, date, date]:
+    daily_metric_paths = list_daily_metric_paths()
+    if not daily_metric_paths:
+        raise RuntimeError(
+            f"No daily metric partitions found under "
+            f"s3://{S3_BUCKET}/{DAILY_MARKET_METRICS_PREFIX}/"
+        )
+    latest_daily_date = max(
+        pd.to_datetime(item["date"]).date() for item in daily_metric_paths
+    )
+    explicit_history_start = history_start_date is not None
+    if history_start_date is None:
+        history_start_date, inspection_start_date = rolling_daily_history_start(
+            latest_daily_date,
+            lookback_months,
+            inspection_trading_days,
+        )
+        print(
+            "No explicit serving-history start supplied; preparing complete "
+            f"Condition D history for {inspection_trading_days} inspection "
+            f"trading days starting {inspection_start_date}."
+        )
+        print(f"Daily serving-history start: {history_start_date}")
+    if explicit_history_start:
+        weekly_history_start_date = week_start_for_date(history_start_date)
+    else:
+        latest_week_start_date = week_start_for_date(latest_daily_date)
+        weekly_history_start_date = latest_week_start_date - timedelta(
+            weeks=weekly_lookback_weeks - 1
+        )
+        print(
+            "Weekly serving history uses an independent completed-week cutoff: "
+            f"{weekly_history_start_date} ({weekly_lookback_weeks} weeks)"
+        )
+    expected_first_week_end_date = official_week_end_trading_date(
+        weekly_history_start_date
+    )
+    daily_paths = daily_history_window(daily_metric_paths, history_start_date)
     daily = read_many_parquet(daily_paths)
     print(f"Daily metric rows selected: {len(daily):,}")
     print(f"Daily metric columns: {list(daily.columns)}")
@@ -656,6 +847,9 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
         "exchange_code",
         "security_status",
         "issue_type_code",
+        "open_price_raw",
+        "high_price_raw",
+        "low_price_raw",
         "close_price_raw",
         "adjusted_close_price",
         "volume",
@@ -684,6 +878,7 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
         raise RuntimeError(f"Weekly metrics parquet missing expected columns: {missing_weekly}")
 
     daily["snapshot_date"] = pd.to_datetime(daily["date"]).dt.date
+    daily = daily[daily["snapshot_date"] >= history_start_date].copy()
     daily["volume_lookback_end_date"] = daily["snapshot_date"]
     daily["volume_lookback_start_date"] = (
         pd.to_datetime(daily["snapshot_date"]) - pd.DateOffset(months=lookback_months)
@@ -701,6 +896,7 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
 
     weekly["week_start_date"] = pd.to_datetime(weekly["week_start_date"]).dt.date
     weekly["week_end_date"] = pd.to_datetime(weekly["week_end_date"]).dt.date
+    weekly = weekly[weekly["week_start_date"] >= weekly_history_start_date].copy()
     weekly["gvkey"] = weekly["gvkey"].astype(str)
     weekly["iid"] = weekly["iid"].astype(str)
 
@@ -730,6 +926,24 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
             f"{skipped_partial_week_rows:,}"
         )
     weekly = weekly[completed_week_mask].copy()
+
+    first_daily_date = daily["snapshot_date"].min()
+    first_week_start_date = weekly["week_start_date"].min()
+    first_week_end_date = weekly["week_end_date"].min()
+    if explicit_history_start and first_daily_date != history_start_date:
+        raise RuntimeError(
+            "Daily serving history does not begin on the configured date: "
+            f"expected {history_start_date}, found {first_daily_date}."
+        )
+    if (
+        first_week_start_date != weekly_history_start_date
+        or first_week_end_date != expected_first_week_end_date
+    ):
+        raise RuntimeError(
+            "Weekly serving history has an unexpected first completed week: "
+            f"expected {weekly_history_start_date} to {expected_first_week_end_date}, "
+            f"found {first_week_start_date} to {first_week_end_date}."
+        )
 
     if "weekly_open_price" not in weekly.columns:
         weekly["weekly_open_price"] = pd.NA
@@ -784,6 +998,9 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
             "snapshot_date": daily_merged["snapshot_date"],
             "gvkey": daily_merged["gvkey"],
             "iid": daily_merged["iid"],
+            "open_price": daily_merged["open_price_raw"],
+            "high_price": daily_merged["high_price_raw"],
+            "low_price": daily_merged["low_price_raw"],
             "close_price": daily_merged["close_price_raw"],
             "adjusted_close_price": daily_merged["adjusted_close_price"],
             "volume": daily_merged["volume"],
@@ -855,7 +1072,17 @@ def build_security_serving_rows(lookback_months: int) -> tuple[pd.DataFrame, pd.
         "Security weekly feature snapshot week_end range: "
         f"{weekly_out['week_end_date'].min()} to {weekly_out['week_end_date'].max()}"
     )
-    return master_out, daily_out, weekly_out
+    print(
+        "Security weekly feature snapshot week_start range: "
+        f"{weekly_out['week_start_date'].min()} to {weekly_out['week_start_date'].max()}"
+    )
+    return (
+        master_out,
+        daily_out,
+        weekly_out,
+        history_start_date,
+        weekly_history_start_date,
+    )
 
 
 def load_table(
@@ -864,6 +1091,7 @@ def load_table(
     df: pd.DataFrame,
     columns: list[str],
     conflict_columns: list[str],
+    insert_only: bool = False,
 ) -> None:
     before_count = table_count(conn, table)
     unique_key_count = df[conflict_columns].drop_duplicates().shape[0]
@@ -872,7 +1100,10 @@ def load_table(
     print(f"Unique primary keys prepared: {unique_key_count:,}")
     print(f"Rows before load: {before_count:,}")
 
-    upsert_dataframe(conn, table, df, columns, conflict_columns)
+    if insert_only:
+        copy_dataframe(conn, table, df, columns)
+    else:
+        upsert_dataframe(conn, table, df, columns, conflict_columns)
 
     after_count = table_count(conn, table)
     print(f"Rows after load: {after_count:,}")
@@ -928,6 +1159,35 @@ def delete_weekly_feature_snapshot_window(conn, weekly_df: pd.DataFrame) -> None
     print(f"Deleted existing security_weekly_feature_snapshot rows in window: {deleted_rows:,}")
 
 
+def prune_daily_feature_history(conn, history_start_date: date) -> None:
+    print(
+        "Pruning security_daily_feature_snapshot rows before history boundary: "
+        f"snapshot_date < {history_start_date}"
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM security_daily_feature_snapshot WHERE snapshot_date < %s",
+            (history_start_date,),
+        )
+        deleted_rows = cur.rowcount
+    print(f"Deleted pre-boundary daily feature rows: {deleted_rows:,}")
+
+
+def prune_weekly_feature_history(conn, history_start_date: date) -> None:
+    weekly_start_date = week_start_for_date(history_start_date)
+    print(
+        "Pruning security_weekly_feature_snapshot rows before history boundary: "
+        f"week_start_date < {weekly_start_date}"
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM security_weekly_feature_snapshot WHERE week_start_date < %s",
+            (weekly_start_date,),
+        )
+        deleted_rows = cur.rowcount
+    print(f"Deleted pre-boundary weekly feature rows: {deleted_rows:,}")
+
+
 def validate_security_master_active_count(conn, security_df: pd.DataFrame) -> None:
     latest_snapshot_date = security_df["snapshot_date"].max()
     latest_snapshot_count = (
@@ -960,25 +1220,111 @@ def main() -> None:
         help="Run sql/create_supabase_serving_tables.sql before loading.",
     )
     parser.add_argument(
+        "--recreate-serving-schema",
+        action="store_true",
+        help=(
+            "Drop and recreate only production serving tables before loading. "
+            "Backtest tables are never dropped."
+        ),
+    )
+    parser.add_argument(
         "--lookback-months",
         type=int,
         default=3,
-        help="Daily security feature snapshot lookback window.",
+        help="Condition D volume-history interval recorded on daily rows.",
+    )
+    parser.add_argument(
+        "--inspection-trading-days",
+        type=int,
+        default=DEFAULT_INSPECTION_TRADING_DAYS,
+        help=(
+            "Recent inspection sessions that must each have a complete daily "
+            "lookback. Defaults to 15 trading days."
+        ),
+    )
+    parser.add_argument(
+        "--weekly-lookback-weeks",
+        type=int,
+        default=DEFAULT_WEEKLY_LOOKBACK_WEEKS,
+        help=(
+            "Completed weekly feature history retained for WMA30 and timing "
+            "support. Defaults to 36 weeks."
+        ),
+    )
+    parser.add_argument(
+        "--prune-history",
+        action="store_true",
+        help=(
+            "Delete daily and weekly serving rows older than the current load "
+            "boundaries. By default, older rows are retained."
+        ),
+    )
+    parser.add_argument(
+        "--history-start-date",
+        type=date.fromisoformat,
+        default=(
+            date.fromisoformat(os.environ["SERVING_HISTORY_START_DATE"])
+            if os.environ.get("SERVING_HISTORY_START_DATE")
+            else None
+        ),
+        help=(
+            "Inclusive serving-history start date. Defaults to "
+            "SERVING_HISTORY_START_DATE when set; otherwise uses the rolling "
+            "--lookback-months cutoff. Historical loads require sufficient "
+            "Supabase storage."
+        ),
+    )
+    parser.add_argument(
+        "--allow-large-history-load",
+        action="store_true",
+        help=(
+            "Acknowledge that an explicit historical load can require several "
+            "gigabytes of Supabase database storage."
+        ),
     )
     parser.add_argument(
         "--only",
-        choices=["security", "security-master", "daily", "weekly", "annual", "quarterly"],
+        choices=[
+            "security",
+            "security-master",
+            "company-master",
+            "daily",
+            "weekly",
+            "annual",
+            "quarterly",
+        ],
         help="Load only one serving table.",
     )
     args = parser.parse_args()
 
+    if args.weekly_lookback_weeks < 30:
+        parser.error("--weekly-lookback-weeks must be at least 30 for WMA30.")
+    if args.inspection_trading_days < 1:
+        parser.error("--inspection-trading-days must be at least 1.")
+
+    if args.history_start_date and not args.allow_large_history_load:
+        parser.error(
+            "--history-start-date requires --allow-large-history-load. "
+            "Confirm Supabase storage capacity before proceeding."
+        )
+
     print("Loading processed S3 features into Supabase serving tables.")
     print(f"S3 bucket: {S3_BUCKET}")
-    print(f"Security snapshot lookback months: {args.lookback_months}")
+    print(
+        f"Security serving history start: {args.history_start_date}"
+        if args.history_start_date
+        else "Security serving history start: rolling lookback"
+    )
+    print(f"Condition D lookback months: {args.lookback_months}")
+    print(f"Inspection trading days supported: {args.inspection_trading_days}")
+    print(f"Weekly feature lookback weeks: {args.weekly_lookback_weeks}")
     print("SUPABASE_DB_URL: set" if os.environ.get("SUPABASE_DB_URL") else "SUPABASE_DB_URL: missing")
 
     with connect_supabase() as conn:
-        if args.apply_schema:
+        if args.recreate_serving_schema:
+            print("Recreating compact Supabase serving schema...")
+            recreate_serving_schema(conn)
+        elif args.apply_schema:
             print("Applying Supabase serving schema...")
             apply_schema(conn)
 
@@ -987,7 +1333,18 @@ def main() -> None:
 
         with conn.transaction():
             if args.only in (None, "security", "security-master", "daily", "weekly"):
-                security_master_df, daily_df, weekly_df = build_security_serving_rows(args.lookback_months)
+                (
+                    security_master_df,
+                    daily_df,
+                    weekly_df,
+                    effective_history_start_date,
+                    effective_weekly_history_start_date,
+                ) = build_security_serving_rows(
+                    args.lookback_months,
+                    args.history_start_date,
+                    args.inspection_trading_days,
+                    args.weekly_lookback_weeks,
+                )
 
             if args.only in (None, "security", "security-master"):
                 print("\nMarking existing security_master rows inactive before upsert...")
@@ -1015,7 +1372,32 @@ def main() -> None:
                     ["gvkey", "iid"],
                 )
 
+            if args.only in (None, "company-master"):
+                company_master_df = build_company_master_rows()
+                load_table(
+                    conn,
+                    "company_master",
+                    company_master_df,
+                    [
+                        "gvkey",
+                        "ticker",
+                        "company_name",
+                        "exchange_code",
+                        "latest_fundamental_date",
+                        "source_s3_path",
+                        "updated_at",
+                    ],
+                    ["gvkey"],
+                )
+
             if args.only in (None, "security", "daily"):
+                if args.prune_history:
+                    prune_daily_feature_history(conn, effective_history_start_date)
+                else:
+                    print(
+                        "Retaining security_daily_feature_snapshot rows before "
+                        f"{effective_history_start_date}."
+                    )
                 delete_daily_feature_snapshot_window(conn, daily_df)
                 load_table(
                     conn,
@@ -1025,6 +1407,9 @@ def main() -> None:
                         "snapshot_date",
                         "gvkey",
                         "iid",
+                        "open_price",
+                        "high_price",
+                        "low_price",
                         "close_price",
                         "adjusted_close_price",
                         "volume",
@@ -1045,10 +1430,21 @@ def main() -> None:
                         "updated_at",
                     ],
                     ["snapshot_date", "gvkey", "iid"],
+                    insert_only=True,
                 )
                 validate_security_master_active_count(conn, daily_df)
 
             if args.only in (None, "security", "weekly"):
+                if args.prune_history:
+                    prune_weekly_feature_history(
+                        conn,
+                        effective_weekly_history_start_date,
+                    )
+                else:
+                    print(
+                        "Retaining security_weekly_feature_snapshot rows before "
+                        f"{effective_weekly_history_start_date}."
+                    )
                 delete_weekly_feature_snapshot_window(conn, weekly_df)
                 load_table(
                     conn,
@@ -1076,6 +1472,7 @@ def main() -> None:
                         "updated_at",
                     ],
                     ["week_end_date", "gvkey", "iid"],
+                    insert_only=True,
                 )
 
             if args.only in (None, "annual"):

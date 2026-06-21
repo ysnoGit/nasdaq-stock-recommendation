@@ -75,11 +75,11 @@ def create_gh_coverage_tables(
         """
         CREATE OR REPLACE TEMP TABLE gh_evaluation_weeks AS
         SELECT
-            future_weekly_confirmation_date AS evaluation_date,
+            week_end_date AS evaluation_date,
             COUNT(DISTINCT gvkey) AS eligible_company_count,
             COUNT(DISTINCT (gvkey, iid)) AS eligible_security_count
         FROM gh_eligible_security_events
-        GROUP BY future_weekly_confirmation_date
+        GROUP BY week_end_date
         """
     )
     con.execute(
@@ -138,7 +138,7 @@ def create_gh_coverage_tables(
         CROSS JOIN gh_evaluation_weeks d
         LEFT JOIN gh_security_evaluation e
           ON e.parameter_id = p.parameter_id
-         AND e.h_confirmation_date = d.evaluation_date
+         AND e.g_date = d.evaluation_date
         GROUP BY ALL
         """
     )
@@ -185,7 +185,7 @@ def write_outputs(con: duckdb.DuckDBPyConnection, output_dir: Path) -> None:
         "gh_parameter_grid": "SELECT * FROM gh_parameter_grid ORDER BY parameter_id",
         "gh_weekly_coverage": "SELECT * FROM gh_weekly_coverage ORDER BY parameter_id, evaluation_date",
         "gh_coverage_summary": "SELECT * FROM gh_coverage_summary ORDER BY coverage_rank, parameter_id",
-        "gh_selections": "SELECT * FROM gh_selections ORDER BY parameter_id, h_confirmation_date, gvkey, iid",
+        "gh_selections": "SELECT * FROM gh_selections ORDER BY parameter_id, g_date, gvkey, iid",
     }
     for name, query in outputs.items():
         relation = con.sql(query)

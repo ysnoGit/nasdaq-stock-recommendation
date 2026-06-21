@@ -84,7 +84,13 @@ def parse_raw_files(keys):
     return yearly_files, date_partition_files
 
 
-def choose_input_files(yearly_files, date_partition_files, target_days, warmup_calendar_days):
+def choose_input_files(
+    yearly_files,
+    date_partition_files,
+    target_days,
+    warmup_calendar_days,
+    start_date=None,
+):
     if not date_partition_files:
         raise RuntimeError(
             "No date-partitioned raw files found. "
@@ -92,10 +98,17 @@ def choose_input_files(yearly_files, date_partition_files, target_days, warmup_c
         )
 
     available_dates = sorted({item["date"] for item in date_partition_files})
-    target_dates = available_dates[-target_days:]
-
-    latest_date = target_dates[-1]
-    earliest_target_date = target_dates[0]
+    latest_date = available_dates[-1]
+    if start_date is not None:
+        if start_date > latest_date:
+            raise ValueError(
+                f"Start date {start_date} is after latest raw date {latest_date}."
+            )
+        target_dates = sorted(next_official_trading_dates(start_date, latest_date))
+        earliest_target_date = start_date
+    else:
+        target_dates = available_dates[-target_days:]
+        earliest_target_date = target_dates[0]
     warmup_start_date = earliest_target_date - timedelta(days=warmup_calendar_days)
 
     selected_paths = []
@@ -148,6 +161,14 @@ def main() -> None:
         help="Number of latest available trading dates to update.",
     )
     parser.add_argument(
+        "--start-date",
+        type=lambda value: pd.to_datetime(value).date(),
+        help=(
+            "Rebuild every official trading date from this inclusive date onward. "
+            "When set, this overrides --target-days."
+        ),
+    )
+    parser.add_argument(
         "--warmup-calendar-days",
         type=int,
         default=250,
@@ -160,7 +181,10 @@ def main() -> None:
     args = parser.parse_args()
 
     print("Building incremental daily market metrics from S3...")
-    print(f"Target days: {args.target_days}")
+    if args.start_date:
+        print(f"Rebuild start date: {args.start_date}")
+    else:
+        print(f"Target days: {args.target_days}")
     print(f"Warm-up calendar days: {args.warmup_calendar_days}")
 
     keys = list_raw_objects()
@@ -171,6 +195,7 @@ def main() -> None:
         date_partition_files=date_partition_files,
         target_days=args.target_days,
         warmup_calendar_days=args.warmup_calendar_days,
+        start_date=args.start_date,
     )
 
     print("=" * 80)

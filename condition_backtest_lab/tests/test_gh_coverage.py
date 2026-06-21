@@ -70,6 +70,18 @@ class GHCoverageTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(result, (True, False))
 
+    def test_coverage_count_is_attributed_to_g_date(self):
+        con = self.create_source()
+        create_gh_coverage_tables(con, weekly_path="weekly_source")
+        result = con.execute(
+            """
+            SELECT evaluation_date, selected_company_count
+            FROM gh_weekly_coverage
+            WHERE parameter_name = 'gh_tol1'
+            """
+        ).fetchone()
+        self.assertEqual(result, (date(2024, 5, 31), 1))
+
     def test_missing_immediately_following_week_expires_g(self):
         con = self.create_source(h_date="2024-06-14")
         create_gh_coverage_tables(con, weekly_path="weekly_source")

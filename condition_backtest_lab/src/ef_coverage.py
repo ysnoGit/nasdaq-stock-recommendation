@@ -98,11 +98,11 @@ def create_ef_coverage_tables(
         """
         CREATE OR REPLACE TEMP TABLE ef_evaluation_dates AS
         SELECT
-            expected_f_date AS evaluation_date,
+            snapshot_date AS evaluation_date,
             COUNT(DISTINCT gvkey) AS eligible_company_count,
             COUNT(DISTINCT (gvkey, iid)) AS eligible_security_count
         FROM ef_eligible_security_events
-        GROUP BY expected_f_date
+        GROUP BY snapshot_date
         """
     )
     con.execute(
@@ -163,7 +163,7 @@ def create_ef_coverage_tables(
         CROSS JOIN ef_evaluation_dates d
         LEFT JOIN ef_security_evaluation e
           ON e.parameter_id = p.parameter_id
-         AND e.f_confirmation_date = d.evaluation_date
+         AND e.e_date = d.evaluation_date
         GROUP BY ALL
         """
     )
@@ -210,7 +210,7 @@ def write_outputs(con: duckdb.DuckDBPyConnection, output_dir: Path) -> None:
         "ef_parameter_grid": "SELECT * FROM ef_parameter_grid ORDER BY parameter_id",
         "ef_daily_coverage": "SELECT * FROM ef_daily_coverage ORDER BY parameter_id, evaluation_date",
         "ef_coverage_summary": "SELECT * FROM ef_coverage_summary ORDER BY coverage_rank, parameter_id",
-        "ef_selections": "SELECT * FROM ef_selections ORDER BY parameter_id, f_confirmation_date, gvkey, iid",
+        "ef_selections": "SELECT * FROM ef_selections ORDER BY parameter_id, e_date, gvkey, iid",
     }
     for name, query in outputs.items():
         relation = con.sql(query)

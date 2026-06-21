@@ -130,6 +130,7 @@ import psycopg
 
 tables = [
     "security_master",
+    "company_master",
     "security_daily_feature_snapshot",
     "security_weekly_feature_snapshot",
     "annual_growth_history",

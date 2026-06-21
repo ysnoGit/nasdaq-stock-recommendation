@@ -56,6 +56,18 @@ class EFCoverageTest(unittest.TestCase):
         ).fetchone()[0]
         self.assertEqual(selected, 1)
 
+    def test_coverage_count_is_attributed_to_e_date(self):
+        con = self.create_source()
+        create_ef_coverage_tables(con, daily_path="daily_source")
+        result = con.execute(
+            """
+            SELECT evaluation_date, selected_company_count
+            FROM ef_daily_coverage
+            WHERE parameter_name = 'ef_tol1'
+            """
+        ).fetchone()
+        self.assertEqual(result, (date(2024, 5, 24), 1))
+
     def test_e_checks_clustering_without_orientation(self):
         con = duckdb.connect()
         con.execute(

@@ -102,6 +102,7 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"]) as conn:
         print(f"current_database: {cur.fetchone()[0]}")
         expected_tables = [
             "security_master",
+            "company_master",
             "security_daily_feature_snapshot",
             "security_weekly_feature_snapshot",
             "annual_growth_history",

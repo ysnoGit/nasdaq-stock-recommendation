@@ -9,12 +9,45 @@ The serving layer now uses five normalized active tables:
 | Table | Grain | Purpose |
 |---|---|---|
 | `security_master` | `gvkey, iid` | Security identity, active status, and universe filter fields. |
+| `company_master` | `gvkey` | Company identity from complete fundamental history for fundamental-only results. |
 | `security_daily_feature_snapshot` | `snapshot_date, gvkey, iid` | Daily price, volume, daily MA, and future daily inputs for F. |
 | `security_weekly_feature_snapshot` | `week_end_date, gvkey, iid` | Completed weekly bars, weekly MA, and future weekly inputs for H. |
 | `annual_growth_history` | `gvkey, fyear` | Annual fundamental growth history. |
 | `quarterly_growth_history` | `gvkey, fyearq, fqtr` | Quarterly fundamental growth history. |
 
+## Browser Screening RPCs
+
+The browser does not select from serving tables directly. RLS remains enabled
+without browser-readable table policies. Anonymous and authenticated clients
+may execute only these `SECURITY DEFINER` functions:
+
+| RPC | Purpose |
+|---|---|
+| `screen_company_counts(...)` | Returns one chart row per inspection anchor with a distinct-company count and evaluability status. |
+| `screen_companies_for_date(...)` | Returns one preferred passing security per company for a selected anchor date. |
+
+Install or update the RPCs from the Supabase SQL Editor with
+`sql/create_stock_screening_rpcs.sql`. The functions validate the date window
+and parameter bounds, use a fixed `search_path`, and expose no dynamic SQL.
+
+Possible `evaluation_status` values are:
+
+| Status | UI behavior |
+|---|---|
+| `complete` | Plot the count and allow the detail list to open. A count of zero is a genuine completed zero. |
+| `pending_f` | Do not plot zero. Show `Awaiting the next trading session to confirm F`. |
+| `pending_h` | Do not plot zero. Show `Awaiting the following completed trading week to confirm H`. |
+| `no_market_session` | Do not plot a screening count for the date. |
+
+The optional `p_exclude_universe` argument defaults to `false`. Current
+`security_master.is_active` is never used to remove historical candidates.
+
 `security_master` owns display and mostly-static identity fields such as `ticker`, `company_name`, `exchange_code`, `security_status`, `security_type`, `is_active`, `is_excluded_universe`, and `exclusion_reason`.
+
+`company_master` owns company-grain display identity for fundamental-only
+screens. It is built from the latest identity found across the complete annual
+and quarterly fundamental histories, including companies outside the current
+daily serving window.
 
 `security_daily_feature_snapshot` and `security_weekly_feature_snapshot` no longer own display identity fields. Query them through `security_master` for ticker, company name, active status, and universe filtering.
 
@@ -53,17 +86,65 @@ Run all tables:
 bash scripts/load_processed_features_to_supabase.sh --apply-schema
 ```
 
+To rebuild only the production serving layer with the compact schema while
+leaving every `backtest_*` table untouched:
+
+```bash
+bash scripts/load_processed_features_to_supabase.sh --recreate-serving-schema
+```
+
+The compact schema stores market measurements as `double precision`, which is
+appropriate for screening calculations and substantially smaller than
+arbitrary-precision `numeric` values loaded from floating-point Parquet data.
+
 Normal recurring load after schema exists:
 
 ```bash
 bash scripts/load_processed_features_to_supabase.sh
 ```
 
+The recurring loader supports the latest 15 inspection trading days by loading
+three calendar months of Condition D history before the earliest of those 15
+sessions. It independently rebuilds 36 weekly partitions. Older rows are
+preserved, so these are replacement windows rather than retention limits. A
+fixed history boundary can be requested without changing code:
+
+```bash
+export SERVING_HISTORY_START_DATE="2024-06-03"
+bash scripts/load_processed_features_to_supabase.sh \
+  --only security \
+  --allow-large-history-load
+```
+
+The equivalent one-run option is `--history-start-date 2024-06-03
+--allow-large-history-load`. The loader includes daily snapshots from
+that date and completed weekly rows beginning with `week_start_date=2024-06-03`
+and `week_end_date=2024-06-07`. It logs and deletes serving rows before the
+configured boundary, then replaces and reloads the selected date range.
+
+`security_weekly_feature_snapshot_compat` is a view over
+`security_weekly_feature_snapshot`, so it reflects the same history
+automatically and does not require a separate load.
+
+The rolling windows define which recent rows are rebuilt on each batch. Rows
+older than those windows are retained by default, allowing serving history to
+accumulate over time. To explicitly remove older rows for storage maintenance,
+run the loader with `--prune-history`.
+
+Because retained history grows after every batch, monitor Supabase database
+usage and use `--prune-history` before approaching the project storage limit.
+
+Before requesting a historical load, confirm that the Supabase project has
+enough database storage. With the current wide row schema and indexes, the
+June 2024 through June 2026 daily and weekly history is expected to require
+several gigabytes. S3 remains the canonical full-history store.
+
 One-table options:
 
 ```bash
 bash scripts/load_processed_features_to_supabase.sh --only security
 bash scripts/load_processed_features_to_supabase.sh --only security-master
+bash scripts/load_processed_features_to_supabase.sh --only company-master
 bash scripts/load_processed_features_to_supabase.sh --only daily
 bash scripts/load_processed_features_to_supabase.sh --only weekly
 bash scripts/load_processed_features_to_supabase.sh --only annual
@@ -93,6 +174,25 @@ JOIN security_master AS sm
 WHERE d.snapshot_date = :selected_date
   AND (:universe_filter = false OR sm.is_excluded_universe = false);
 ```
+
+Fundamental-only results operate at company grain and join `company_master` by
+`gvkey`:
+
+```sql
+SELECT
+    result.evaluation_date,
+    result.gvkey,
+    cm.ticker,
+    cm.company_name,
+    result.flag_a,
+    result.flag_b
+FROM fundamental_screen_result AS result
+JOIN company_master AS cm
+  ON cm.gvkey = result.gvkey;
+```
+
+This avoids inventing an `iid` for companies that appear in fundamental
+history but not in the current security-level serving window.
 
 Conditions A-H should be evaluated dynamically:
 
@@ -147,13 +247,19 @@ SELECT recent_c_count >= :m AS flag_d
 FROM recent_volume;
 ```
 
-Because Condition D looks back three months, the serving load must retain at least the latest three months of `security_daily_feature_snapshot` rows.
+Because Condition D looks back three months, the serving history must begin at
+least three months before any inspection date that the application permits.
+The recurring project default rebuilds enough daily history for 15 recent
+inspection trading days and 36 weeks of weekly features while preserving older
+rows already in Supabase.
+Longer history remains available in S3 and can be loaded explicitly when the
+database tier has sufficient capacity.
 
 ## Validation
 
 The loader prints:
 
-- S3 bucket and lookback window.
+- S3 bucket, serving-history boundary, and Condition D lookback interval.
 - Selected daily partition count and latest date.
 - Input row counts and input columns.
 - Built row counts.
@@ -165,6 +271,7 @@ Run table checks:
 
 ```sql
 select count(*) from security_master;
+select count(*) from company_master;
 select count(*) from security_daily_feature_snapshot;
 select count(*) from security_weekly_feature_snapshot;
 select count(*) from annual_growth_history;
@@ -175,6 +282,12 @@ from security_daily_feature_snapshot;
 
 select min(week_end_date), max(week_end_date), count(distinct week_end_date)
 from security_weekly_feature_snapshot;
+
+select min(week_start_date), min(week_end_date)
+from security_weekly_feature_snapshot;
+
+select min(week_start_date), min(week_end_date)
+from security_weekly_feature_snapshot_compat;
 
 select count(*)
 from security_daily_feature_snapshot

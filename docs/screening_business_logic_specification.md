@@ -1,7 +1,7 @@
 # Screening Business and Timing Logic Specification
 
 **Status:** Authoritative business-rule reference  
-**Last reviewed:** 2026-06-14  
+**Last reviewed:** 2026-06-21<br>
 **Scope:** Conditions A-H, component screens, coverage studies, and backtest outcomes
 
 ## Purpose
@@ -49,11 +49,86 @@ test.
 | H confirmation date | Completed official trading week immediately following the G week. |
 | Actionable selected date | First date on which every required condition for the screen is observable and has passed. |
 | Evaluation date | Calendar-quarter end used by the A&B coverage study. |
+| Inspection window | Inclusive user-requested range of inspection anchor dates for which company counts are requested. Supporting causal history and required future confirmations may fall outside this range. |
+| Inspection anchor date | Date to which a screening count belongs. This date must be inside the inspection window; supporting dates do not have to be. |
+| Standalone G&H setup date | Completed official week-end date on which G is evaluated. It is the inspection anchor date for standalone G&H; H is checked on the following completed week. |
 | Official week end | Final actual U.S. exchange trading session of a calendar week. Usually Friday, but earlier when Friday is a holiday. |
 | Data-as-of date | Date through which source data was available when an output was built. It is not a weekly partition key or confirmation date. |
 
 The official U.S. exchange calendar must be used for weekly logic. The current
 calendar utility prefers XNAS and falls back to XNYS.
+
+### Inspection-Window Semantics for Conditions C-H
+
+**DECIDED**
+
+The inspection window limits only the inspection anchor dates whose company
+counts are requested. It does not truncate the supporting data needed to
+evaluate those anchor dates:
+
+- C&D uses the shared C/D daily evaluation date as its inspection anchor.
+- E&F uses the E setup date as its inspection anchor. F is checked on the
+  immediately following official session, even when that session is after the
+  inspection-window end.
+- Standalone G&H uses the completed G setup week as its inspection anchor. H
+  is checked on the immediately following completed official week, even when
+  that week is after the inspection-window end.
+- C&D&E&F uses the shared C/D/E daily signal date as its inspection anchor.
+- C&D&G&H uses the C/D daily signal date as its inspection anchor. On ordinary
+  trading dates it evaluates C&D only. When the anchor is the official week
+  end, G&H becomes an additional AND gate.
+- A Daily Price + Weekly Price E&F&G&H screen uses the E date as its inspection
+  anchor and checks F on the next official session. On ordinary trading dates
+  it evaluates E&F only. When E is the official week end, G&H becomes an
+  additional AND gate.
+- Joined A-H uses its A-E daily signal date as the inspection anchor for
+  screening counts while retaining its separately defined actionable date.
+
+Historical rows before the start and required confirmation rows after the end
+may be used when they are causally required to evaluate an anchor date inside
+the window. A candidate whose anchor date is outside the inspection window is
+not included merely because one of its supporting dates falls inside it.
+
+The inspection-count date and actionable selected date are intentionally
+different for screens requiring F or H. Counts and chart points belong to the
+inspection anchor date. Entry timing and performance measurement begin only
+on the actionable confirmation date after every required condition is known.
+
+When a required future confirmation row is not yet available as of the data
+snapshot, the candidate is pending/not evaluable. It must not be treated as a
+confirmed pass or a confirmed failure.
+
+### Mixed-Frequency G&H Gate
+
+**DECIDED**
+
+When G&H is combined with conditions evaluated at daily grain, do not force a
+weekly result onto every daily inspection anchor:
+
+1. Determine whether the daily inspection anchor is the official final U.S.
+   exchange session of its calendar week.
+2. On a non-week-end trading date, evaluate and count companies using the
+   selected non-weekly conditions only. G&H is not evaluated and the count is
+   not zero merely because no weekly result exists.
+3. On an official week-end trading date, evaluate the non-weekly conditions
+   and apply G&H as an additional AND condition for the same securities.
+4. Use the immediately following completed official week to check H. That H
+   row may be after the inspection-window end because the count remains
+   attributed to the in-window week-end anchor.
+5. A holiday-shortened Thursday is a week-end anchor when the exchange is
+   closed on Friday. Missing security data must not be used to infer the end
+   of a week; use the official exchange calendar.
+
+Example for E&F combined with G&H:
+
+- Monday through Thursday inspection anchors: count E&F passes.
+- Friday inspection anchor, or Thursday in a Friday-holiday week: count only
+  securities passing E&F and G&H.
+
+Fundamental-only A&B screening is different: it uses the selected end date as
+its evaluation date and does not require a start date. If fundamentals are
+ever joined with C-H, the inspection-anchor semantics above still apply to the
+market-condition screening counts.
 
 ## Source Data and Grain
 
@@ -160,6 +235,51 @@ At the evaluation date:
 
 Condition B passes only if the entire latest requested block passes. A missing
 or invalid latest period cannot be skipped.
+
+### Production Fundamental Inspection
+
+**DECIDED**
+
+The production application exposes Condition A and Condition B as separate,
+mutually exclusive screens. Neither fundamental screen can be combined with
+Conditions C-H. The two screens share a dedicated calendar-quarter inspection
+control that is independent of the daily market inspection window.
+
+The user selects an **Inspection through** year and quarter. The default is the
+completed calendar quarter immediately preceding the current calendar quarter.
+The chart then moves backward by the selected number of inspection periods.
+Annual and quarterly inspection periods default to four and remain separate
+from `annual_years` and `quarter_count`, which control condition lookback.
+
+Every requested calendar quarter is returned. A quarter without the relevant
+source records is displayed as zero with an internal `no_data` status; it is
+not skipped or replaced by an older quarter.
+
+For the Annual Fundamental screen:
+
+1. A chart point represents a calendar quarter.
+2. Candidate companies are those with an annual fiscal-year record whose
+   `datadate` falls inside that calendar quarter. This means the company's full
+   fiscal year ended during the chart quarter.
+3. When more than one annual record exists for a company in the bucket, use
+   the latest `datadate` in that bucket as the candidate endpoint.
+4. Evaluate Condition A using that fiscal year and its required immediately
+   preceding consecutive fiscal years.
+
+For the Quarterly Fundamental screen:
+
+1. A chart point represents a calendar quarter.
+2. Candidate companies are those with a fiscal-quarter record whose `datadate`
+   falls inside that calendar quarter.
+3. When more than one quarterly record exists for a company in the bucket, use
+   the latest `datadate` in that bucket as the candidate endpoint.
+4. Evaluate Condition B using that fiscal quarter and its required immediately
+   preceding consecutive fiscal quarters.
+
+Calendar quarters group chart results; they do not rename company fiscal
+periods. For example, a fiscal Q1 ending October 31 belongs to the calendar Q4
+chart bucket but remains fiscal Q1 for consecutiveness and year-over-year
+growth calculation.
 
 ### Fundamental Availability Timing
 
@@ -361,9 +481,61 @@ The component backtest lab registers:
 | C&D&E&F | F confirmation date |
 | C&D&G&H | H confirmation official week-end date |
 
+Screening coverage and application charts use different dates from the
+actionable dates above:
+
+| Group | Inspection-count anchor date |
+|---|---|
+| A&B | Selected fundamental evaluation/end date |
+| C&D | C/D daily evaluation date |
+| E&F | E setup date |
+| G&H | G setup official week-end date |
+| C&D&E&F | Shared C/D/E daily signal date |
+| C&D&G&H | C/D daily signal date |
+| E&F&G&H | E setup date |
+
 For A&B, which selects at company grain, map each selected company to one
 tradable security by preferring a matching ticker, then `iid = '01'`, then the
 security with the deepest available daily price history.
+
+### Standalone G&H Inspection-Window Timing
+
+**DECIDED**
+
+For a standalone G&H screen, apply the inclusive inspection window to the
+**G setup date**, which is the inspection anchor date. The H confirmation date
+may be outside the inspection window.
+
+1. Enumerate completed official G weeks whose `g_date` falls inside the
+   requested inspection window.
+2. Evaluate G on each included `g_date` using that week's WMA5, WMA10, and
+   WMA30 values and the selected weekly tolerance.
+3. Evaluate H on the completed official week immediately following G.
+4. Use the required H date even when it falls after the inspection-window end.
+5. Attribute the screening count and chart point to G, the inspection anchor
+   date.
+6. The actionable selected date for entry/performance remains the H
+   confirmation official week-end date because G&H is not fully observable
+   until H.
+
+Example for an inspection window of `2026-05-01` through `2026-05-31`:
+
+| Included G setup/count date | Required H confirmation/actionable date |
+|---|---|
+| 2026-05-01 | 2026-05-08 |
+| 2026-05-08 | 2026-05-15 |
+| 2026-05-15 | 2026-05-22 |
+| 2026-05-22 | 2026-05-29 |
+| 2026-05-29 | 2026-06-05 |
+
+The `2026-04-24` G setup is excluded even though its H date is `2026-05-01`.
+The `2026-05-29` G setup is included and its pass/fail result is counted on
+`2026-05-29`, using H data from `2026-06-05`.
+
+The G-to-H pairing above describes the standalone G&H screen. Joined A-H and
+C&D&G&H retain their separately defined daily inspection anchors and G-mapping
+rules. Their future confirmations may also fall outside the inspection window
+when required to evaluate an in-window anchor date.
 
 ## A&B Coverage Study
 
@@ -480,10 +652,29 @@ This rule prevents dense clusters of repeated signals from one security from
 dominating performance averages while still allowing that security to become
 a later independent selection.
 
-**PENDING**
+**DECIDED FOR THE PRODUCTION APPLICATION**
 
-The production application must explicitly decide whether it shows every
-passing event, the latest event, or applies a cooldown.
+The interactive application evaluates every inspection anchor independently.
+A company may appear on multiple inspection dates when it passes on each date.
+Each date counts a `gvkey` at most once, and the application does not apply the
+backtest's 180-day cooldown.
+
+## Production Serving Decisions
+
+**DECIDED**
+
+- Browser clients call tightly controlled `SECURITY DEFINER` Supabase RPCs.
+  Direct table access remains blocked by RLS.
+- Anonymous visitors may execute the screening RPCs.
+- Chart counts use distinct `gvkey` companies. Detail results retain one
+  passing security per company, preferring `iid = '01'` and then the most
+  recently observed security.
+- Fundamental-only identity comes from `company_master`; market-condition
+  identity comes from `security_master`.
+- Pending F or H confirmation is returned explicitly and is never represented
+  as a zero-company result.
+- Current `security_master.is_active` is not used for historical screening.
+  The optional explicit universe-exclusion filter defaults to off.
 
 ## Entry Price and Return Outcomes
 
@@ -561,6 +752,8 @@ mean.
 | Older joined A-F/A-H fundamental query | It filters invalid growth rows before selecting the latest lookback, so it can skip a missing latest period. | Align it with the consecutive, fully valid latest-period A/B rules before relying on a new full-screen run. |
 | Production helper E/G flags | They check clustering with fixed tolerances. | Recalculate official E/G dynamically when using user-selected tolerances. |
 | Production helper F/H flags | They are fixed-threshold helper flags. | Recalculate official crossover conditions dynamically from current and future input values. |
+| Windowed C-H consumers | Implemented in the component backtest for E&F, G&H, C&D&E&F, and C&D&G&H. Production/application consumers still need the same treatment. | Filter and group screening counts by the group-specific inspection anchor date. Continue using required past/future supporting rows, and preserve F/H as actionable dates for entry/performance. |
+| Mixed-frequency combined screens | Implemented for the component C&D&G&H backtest. Production/application consumers still need the same gate. | Apply G&H only when the daily inspection anchor is the official week-end. On other trading dates, retain the result from the selected non-weekly conditions. |
 | Fundamental availability | Filing/publication dates are absent. | Add availability dates before claiming a fully look-ahead-safe production screen. |
 | Component performance studies | Entry, retention, and performance-comparison rules remain incomplete. | Resolve them before implementing component performance tests. |
 
@@ -585,10 +778,25 @@ Every implementation of these rules should include tests for:
 11. A holiday-shortened week uses the actual final trading session.
 12. H uses the completed weekly row immediately following G and requires the
     WMA10/WMA30 crossover.
-13. Missing future rows do not pass F or H.
-14. A-F return measurement starts on F.
-15. A-H return measurement starts only after both F and H are observable.
-16. Horizon prices use the first available trading session on or after each
+13. C&D counts are attributed to the C/D daily inspection anchor date.
+14. E&F counts are attributed to E, including when the required F session is
+    after the inspection-window end.
+15. G&H counts are attributed to G, including when the required H week is
+    after the inspection-window end.
+16. Joined C-H screens filter and group counts by their defined daily or weekly
+    inspection anchor, not by their later actionable confirmation date.
+17. A candidate anchored outside the window is excluded even if a supporting
+    setup or confirmation date is inside the window.
+18. Pre-window history and post-window confirmation rows remain available when
+    causally required to evaluate an in-window anchor date.
+19. A combined daily-plus-G&H screen returns the non-weekly condition count on
+    non-week-end trading dates rather than zero or not-applicable.
+20. The same combined screen applies G&H as an additional AND gate only on the
+    official week-end inspection anchor.
+21. Missing future rows leave F/H pending or not evaluable; they do not pass.
+22. A-F return measurement starts on F.
+23. A-H return measurement starts only after both F and H are observable.
+24. Horizon prices use the first available trading session on or after each
     calendar horizon.
 
 ## Implementation Map
@@ -646,3 +854,8 @@ When changing a condition:
 | 2026-06-15 | WMA5/WMA10/WMA30 use preceding completed weekly closes and require complete 5/10/30-week windows. |
 | 2026-06-15 | C&D&E&F shares a daily C/D/E signal and groups coverage on next-session F confirmation. |
 | 2026-06-15 | C&D&G&H maps each C/D daily signal to the first completed official G week ending on or after it and groups coverage on following-week H confirmation. |
+| 2026-06-19 | Refined: standalone G&H initially allowed H after the window but did not yet distinguish the G inspection-count date from the H actionable date. |
+| 2026-06-19 | Superseded: the inspection window was briefly treated as a strict boundary for every C-H supporting and confirmation date. |
+| 2026-06-19 | The inspection window limits screening-count anchor dates only. Required causal history and future F/H confirmations may lie outside it; counts remain attributed to the in-window anchor, while entry/performance begins on the later actionable date. Fundamental-only A&B uses the end date without requiring a start date. |
+| 2026-06-19 | In mixed-frequency screens, G&H is an additional AND gate only on official week-end inspection anchors. Non-week-end dates retain the count from the selected non-weekly conditions. |
+| 2026-06-20 | Updated component backtests so E&F counts on E, G&H counts on G, C&D&E&F counts on the shared signal date, and C&D&G&H counts on each C/D daily anchor while applying G&H only at official week ends. F/H remain actionable performance dates. |

@@ -79,7 +79,7 @@ def create_cdef_coverage_tables(
          AND f.flag_e AND f.flag_f
         """
     )
-    create_combined_summary(con, "cdef", "confirmation_date", "trading_date")
+    create_combined_summary(con, "cdef", "signal_date", "trading_date")
 
 
 def create_cdgh_coverage_tables(
@@ -100,9 +100,13 @@ def create_cdgh_coverage_tables(
     ).fetchall()
     mapping = pd.DataFrame(
         [
-            {"signal_date": row[0], "g_date": weeks.get(week_start_for_date(row[0]))}
+            {
+                "signal_date": row[0],
+                "g_date": weeks.get(week_start_for_date(row[0])),
+                "weekly_gate_applied": row[0]
+                == weeks.get(week_start_for_date(row[0])),
+            }
             for row in daily_dates
-            if weeks.get(week_start_for_date(row[0])) is not None
         ]
     )
     con.register("cdgh_date_map_df", mapping)
@@ -111,12 +115,30 @@ def create_cdgh_coverage_tables(
         """
         CREATE OR REPLACE TEMP TABLE cdgh_eligible_events AS
         SELECT
-            p.*, c.evaluation_date AS signal_date, g.week_end_date AS g_date,
-            g.future_weekly_confirmation_date AS confirmation_date, c.gvkey, c.iid
+            p.*, c.evaluation_date AS signal_date,
+            CAST(NULL AS DATE) AS g_date,
+            c.evaluation_date AS confirmation_date,
+            FALSE AS weekly_gate_applied,
+            c.gvkey, c.iid
         FROM cdgh_parameter_grid p
         JOIN cd_eligible_security_evaluation c
           ON c.volume_ratio_threshold = p.volume_ratio_threshold
         JOIN cdgh_date_map m ON c.evaluation_date = m.signal_date
+        WHERE NOT m.weekly_gate_applied
+
+        UNION ALL
+
+        SELECT
+            p.*, c.evaluation_date AS signal_date, g.week_end_date AS g_date,
+            g.future_weekly_confirmation_date AS confirmation_date,
+            TRUE AS weekly_gate_applied,
+            c.gvkey, c.iid
+        FROM cdgh_parameter_grid p
+        JOIN cd_eligible_security_evaluation c
+          ON c.volume_ratio_threshold = p.volume_ratio_threshold
+        JOIN cdgh_date_map m
+          ON c.evaluation_date = m.signal_date
+         AND m.weekly_gate_applied
         JOIN gh_eligible_security_events g
           ON m.g_date = g.week_end_date
          AND c.gvkey = g.gvkey AND c.iid = g.iid
@@ -126,8 +148,32 @@ def create_cdgh_coverage_tables(
         """
         CREATE OR REPLACE TEMP TABLE cdgh_selections AS
         SELECT
+            p.*, c.evaluation_date AS signal_date,
+            CAST(NULL AS DATE) AS g_date,
+            c.evaluation_date AS confirmation_date,
+            FALSE AS weekly_gate_applied,
+            c.gvkey, c.iid,
+            c.ticker, c.company_name, c.volume_ratio, c.surge_day_count,
+            CAST(NULL AS DOUBLE) AS weekly_ma5,
+            CAST(NULL AS DOUBLE) AS weekly_ma10,
+            CAST(NULL AS DOUBLE) AS weekly_ma30,
+            CAST(NULL AS DOUBLE) AS future_weekly_ma10,
+            CAST(NULL AS DOUBLE) AS future_weekly_ma30
+        FROM cdgh_parameter_grid p
+        JOIN cd_eligible_security_evaluation c
+          ON c.volume_ratio_threshold = p.volume_ratio_threshold
+         AND c.flag_c AND c.surge_day_count >= p.volume_surge_min_days
+        JOIN cdgh_date_map m
+          ON c.evaluation_date = m.signal_date
+         AND NOT m.weekly_gate_applied
+
+        UNION ALL
+
+        SELECT
             p.*, c.evaluation_date AS signal_date, g.g_date,
-            g.h_confirmation_date AS confirmation_date, c.gvkey, c.iid,
+            g.h_confirmation_date AS confirmation_date,
+            TRUE AS weekly_gate_applied,
+            c.gvkey, c.iid,
             c.ticker, c.company_name, c.volume_ratio, c.surge_day_count,
             g.weekly_ma5, g.weekly_ma10, g.weekly_ma30,
             g.future_weekly_ma10, g.future_weekly_ma30
@@ -135,7 +181,9 @@ def create_cdgh_coverage_tables(
         JOIN cd_eligible_security_evaluation c
           ON c.volume_ratio_threshold = p.volume_ratio_threshold
          AND c.flag_c AND c.surge_day_count >= p.volume_surge_min_days
-        JOIN cdgh_date_map m ON c.evaluation_date = m.signal_date
+        JOIN cdgh_date_map m
+          ON c.evaluation_date = m.signal_date
+         AND m.weekly_gate_applied
         JOIN gh_security_evaluation g
           ON g.weekly_ma_tolerance_pct = p.weekly_ma_tolerance_pct
          AND m.g_date = g.g_date
@@ -143,7 +191,7 @@ def create_cdgh_coverage_tables(
          AND g.flag_g AND g.flag_h
         """
     )
-    create_combined_summary(con, "cdgh", "confirmation_date", "week")
+    create_combined_summary(con, "cdgh", "signal_date", "trading_date")
 
 
 def create_combined_summary(

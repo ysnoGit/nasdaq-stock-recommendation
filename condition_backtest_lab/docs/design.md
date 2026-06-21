@@ -114,8 +114,10 @@ Parameter choices:
 - H owns the complete crossover: require `WMA10 <= WMA30` on G and
   `WMA10 > WMA30` on the immediately following completed official week.
 - Expire G when the security has no row on that immediately following week.
-- Group coverage by H confirmation date, count distinct `gvkey`, retain
+- Group coverage by the G completed-week date, count distinct `gvkey`, retain
   genuine zero-selection weeks, and rank average coverage by distance from 30.
+- H may fall outside an inspection window because it is supporting evidence;
+  the company remains attributed to the in-window G anchor date.
 - Preserve every passing G/H security event for later performance analysis.
 
 Parameter choices:

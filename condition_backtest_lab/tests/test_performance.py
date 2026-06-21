@@ -4,10 +4,16 @@ import unittest
 
 import pandas as pd
 
-from condition_backtest_lab.src.performance import apply_cooldown
+from condition_backtest_lab.src.performance import GROUPS, apply_cooldown
 
 
 class PerformanceCooldownTest(unittest.TestCase):
+    def test_performance_uses_actionable_confirmation_dates(self) -> None:
+        self.assertEqual(GROUPS["ef"][0], "f_confirmation_date")
+        self.assertEqual(GROUPS["gh"][0], "h_confirmation_date")
+        self.assertEqual(GROUPS["cdef"][0], "confirmation_date")
+        self.assertEqual(GROUPS["cdgh"][0], "confirmation_date")
+
     def test_cooldown_is_measured_from_last_retained_event(self) -> None:
         events = pd.DataFrame(
             [

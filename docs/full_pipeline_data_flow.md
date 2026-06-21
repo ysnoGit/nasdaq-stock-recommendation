@@ -108,12 +108,17 @@ Supabase is optional and is used only as a serving layer for app-facing relation
 
 ```text
 security_master
-security_feature_snapshot
+company_master
+security_daily_feature_snapshot
+security_weekly_feature_snapshot
 annual_growth_history
 quarterly_growth_history
 ```
 
-`security_master` stores `ticker`, `company_name`, active status, and universe filter fields at `gvkey, iid` grain. `security_feature_snapshot` stores time-varying features at `snapshot_date, gvkey, iid` grain.
+`security_master` stores security identity and universe fields at `gvkey, iid`
+grain. `company_master` stores company identity from full fundamental history
+at `gvkey` grain. Daily and weekly feature snapshots store time-varying market
+features at their respective security/date grains.
 
 Setup and commands are documented in [`docs/supabase_serving_layer.md`](supabase_serving_layer.md).
 
@@ -315,7 +320,9 @@ Because Condition D depends on configurable `q` and `m` values, it should be cal
 ## Current Limitations
 
 - The extraction steps require WRDS network access, `WRDS_USERNAME`, and a correctly permissioned `~/.pgpass`.
-- Daily and weekly market metrics are incremental by default. Larger historical rebuilds require explicit arguments, such as `--start-week-date` for weekly metrics.
+- Daily and weekly market metrics are incremental by default. Larger historical
+  rebuilds use `--start-date` for daily metrics and `--start-week-date` for
+  weekly metrics. Both commands include their required rolling warm-up history.
 - Historical S3 files under `processed/recent_daily_volume_metrics/` may remain, but they are old artifacts and are not read by the active pipeline.
 - Universe filter fields are calculated in the Supabase loader and stored in `security_master`.
 

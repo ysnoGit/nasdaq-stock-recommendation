@@ -108,9 +108,11 @@ python3 condition_backtest_lab/reports/build_combined_coverage_reports.py
 ```
 
 C&D&E&F evaluates 54 parameter combinations on a shared daily C/D/E signal
-and groups coverage on F confirmation. C&D&G&H evaluates 72 combinations,
-anchors G to the first completed official week ending on or after the C/D
-signal, and groups coverage on H confirmation.
+and groups coverage on that signal date; F remains the actionable performance
+date. C&D&G&H evaluates 72 combinations on every C/D daily signal date. G&H
+acts as an additional AND gate only when that signal is an official completed
+week-end; non-week-end dates retain the C&D result. When the weekly gate is
+applied, H remains the actionable performance date.
 
 Run the component performance study after all coverage outputs exist:
 

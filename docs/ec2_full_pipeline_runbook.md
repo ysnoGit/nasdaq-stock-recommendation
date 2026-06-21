@@ -127,7 +127,46 @@ The full pipeline now stops after processed feature creation. It no longer write
 bash scripts/load_processed_features_to_supabase.sh --apply-schema
 ```
 
-The Supabase serving load writes five active tables: `security_master`, `security_daily_feature_snapshot`, `security_weekly_feature_snapshot`, `annual_growth_history`, and `quarterly_growth_history`.
+The recurring serving loader rebuilds enough Condition D history to support
+the latest 15 inspection trading days and independently rebuilds 36 weeks of
+weekly features. Older rows already in Supabase are preserved.
+
+These windows are replacement boundaries, not automatic retention limits.
+Normal batches preserve older serving rows. Use `--prune-history` only when an
+intentional storage cleanup is required; the command logs the boundary and
+deleted row count.
+For an explicit historical rebuild beginning `2024-06-03`, first confirm that
+the Supabase database tier has several gigabytes of free storage, then run:
+
+```bash
+python3 server_pipeline/daily/build_daily_market_metrics_s3.py \
+  --start-date 2024-06-03
+python3 server_pipeline/daily/build_weekly_market_metrics_s3.py \
+  --start-week-date 2024-06-03
+
+export SERVING_HISTORY_START_DATE="2024-06-03"
+bash scripts/load_processed_features_to_supabase.sh \
+  --apply-schema \
+  --only security \
+  --allow-large-history-load
+```
+
+Expected earliest serving dates are:
+
+- `security_daily_feature_snapshot.snapshot_date = 2024-06-03`
+- `security_weekly_feature_snapshot.week_start_date = 2024-06-03`
+- `security_weekly_feature_snapshot.week_end_date = 2024-06-07`
+
+The loader preserves rows before the configured replacement boundary unless
+`--prune-history` is explicitly supplied. The
+`security_weekly_feature_snapshot_compat` view reads the weekly base table and
+therefore updates automatically.
+
+The Supabase serving load writes six active tables: `security_master`,
+`company_master`, `security_daily_feature_snapshot`,
+`security_weekly_feature_snapshot`, `annual_growth_history`, and
+`quarterly_growth_history`. Fundamental-only queries join `company_master` by
+`gvkey`; daily and weekly queries join `security_master` by `gvkey, iid`.
 
 Weekly market metrics use `week_start_date` as the stable S3 partition key:
 

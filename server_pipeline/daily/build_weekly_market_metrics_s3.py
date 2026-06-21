@@ -94,6 +94,7 @@ def choose_input_files(
     date_partition_files,
     target_weeks: int,
     warmup_calendar_days: int,
+    start_week_date=None,
 ):
     if not date_partition_files:
         raise RuntimeError(
@@ -104,7 +105,12 @@ def choose_input_files(
     available_dates = sorted({item["date"] for item in date_partition_files})
 
     latest_date = available_dates[-1]
-    warmup_start_date = latest_date - timedelta(days=warmup_calendar_days)
+    target_start_date = start_week_date or latest_date
+    if target_start_date > latest_date:
+        raise ValueError(
+            f"Start week {target_start_date} is after latest raw date {latest_date}."
+        )
+    warmup_start_date = target_start_date - timedelta(days=warmup_calendar_days)
 
     selected_paths = []
 
@@ -383,6 +389,7 @@ def main() -> None:
         date_partition_files=date_partition_files,
         target_weeks=args.target_weeks,
         warmup_calendar_days=args.warmup_calendar_days,
+        start_week_date=start_week_date,
     )
 
     print("=" * 80)
