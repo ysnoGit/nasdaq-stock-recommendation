@@ -455,23 +455,11 @@ select:focus-visible {
   color: var(--color-accent);
 }
 
-.guide-data-note {
-  display: flex;
-  gap: 14px;
-  margin-top: 25px;
-  padding: 14px 16px;
-  color: #674800;
-  background: #fff8e6;
-  border-left: 3px solid #c99722;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.guide-data-note strong {
-  flex: 0 0 auto;
-}
-
 .guide-stack-section {
+  padding-top: 30px;
+}
+
+.guide-page > .guide-section:last-child {
   border-bottom: 0;
 }
 
@@ -515,6 +503,11 @@ select:focus-visible {
   margin-top: 26px;
   color: var(--color-text-muted);
   font-size: 13px;
+}
+
+.guide-page-credit {
+  margin-top: 0;
+  padding: 22px 0 4px;
 }
 
 .guide-footer a {
@@ -1251,10 +1244,6 @@ select:focus-visible {
     grid-column: auto;
   }
 
-  .guide-data-note {
-    flex-direction: column;
-    gap: 4px;
-  }
 
   .filter-section {
     padding: 18px 16px;

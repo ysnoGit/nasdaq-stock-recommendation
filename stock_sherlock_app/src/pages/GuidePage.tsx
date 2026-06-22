@@ -6,7 +6,6 @@ import {
   Cloud,
   Code2,
   Database,
-  ExternalLink,
   ListFilter,
   TableProperties,
 } from 'lucide-react'
@@ -118,6 +117,19 @@ export function GuidePage({ onOpenFilter }: GuidePageProps) {
         </button>
       </section>
 
+      <section className="guide-section guide-stack-section" aria-labelledby="stack-title">
+        <div className="guide-section-heading">
+          <p className="guide-eyebrow">Implementation</p>
+          <h2 id="stack-title">Production Architecture and Technology Stack</h2>
+        </div>
+        <div className="stack-grid">
+          <div><Database aria-hidden="true" size={19} /><strong>Data</strong><span>WRDS Compustat, Python, DuckDB, Parquet</span></div>
+          <div><Cloud aria-hidden="true" size={19} /><strong>Cloud</strong><span>AWS EC2, S3, EventBridge, SSM, Amplify</span></div>
+          <div><ListFilter aria-hidden="true" size={19} /><strong>Serving</strong><span>Supabase PostgreSQL and controlled RPC functions</span></div>
+          <div><Code2 aria-hidden="true" size={19} /><strong>Frontend</strong><span>React, TypeScript, Vite, Recharts</span></div>
+        </div>
+      </section>
+
       <section className="guide-section" aria-labelledby="workflow-title">
         <div className="guide-section-heading">
           <p className="guide-eyebrow">Screening workflow</p>
@@ -218,30 +230,13 @@ export function GuidePage({ onOpenFilter }: GuidePageProps) {
             <li><CheckCircle2 aria-hidden="true" size={17} />Reproduce the same screen across dates instead of relying on manual judgment</li>
           </ul>
         </div>
-        <aside className="guide-data-note">
-          <strong>Data note</strong>
-          <span>Fundamental history currently uses fiscal period-end dates because filing publication dates are not available in the source dataset. Treat historical fundamental results as research signals, not investment advice.</span>
-        </aside>
       </section>
 
-      <section className="guide-section guide-stack-section" aria-labelledby="stack-title">
-        <div className="guide-section-heading">
-          <p className="guide-eyebrow">Implementation</p>
-          <h2 id="stack-title">Built as a production-style data application</h2>
-        </div>
-        <div className="stack-grid">
-          <div><Database aria-hidden="true" size={19} /><strong>Data</strong><span>WRDS Compustat, Python, DuckDB, Parquet</span></div>
-          <div><Cloud aria-hidden="true" size={19} /><strong>Cloud</strong><span>AWS EC2, S3, EventBridge, SSM, Amplify</span></div>
-          <div><ListFilter aria-hidden="true" size={19} /><strong>Serving</strong><span>Supabase PostgreSQL and controlled RPC functions</span></div>
-          <div><Code2 aria-hidden="true" size={19} /><strong>Frontend</strong><span>React, TypeScript, Vite, Recharts</span></div>
-        </div>
-        <footer className="guide-footer">
-          <span>Created by <strong>ysno</strong></span>
-          <a href="https://github.com/ysnoGit/nasdaq-stock-recommendation" target="_blank" rel="noreferrer">
-            <ExternalLink aria-hidden="true" size={17} /> View repository
-          </a>
-        </footer>
-      </section>
+      <footer className="guide-footer guide-page-credit">
+        <span>Created by <strong>Yeongseok No</strong></span>
+        <span>National University of Singapore (NUS) · Digital Financial Technology (DFinTech)</span>
+      </footer>
+
     </main>
   )
 }
