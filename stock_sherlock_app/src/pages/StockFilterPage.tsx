@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Filter } from 'lucide-react'
 import { ConditionSelector } from '../components/ConditionSelector'
-import { Header } from '../components/Header'
 import { ParameterPanel } from '../components/ParameterPanel'
 import { ResultChartSection } from '../components/ResultChartSection'
 import { SelectedStockListSection } from '../components/SelectedStockListSection'
@@ -286,10 +285,7 @@ export function StockFilterPage() {
   }
 
   return (
-    <div className="app-shell">
-      <Header />
-
-      <main className="dashboard-layout">
+    <main className="dashboard-layout">
         <aside className="filter-panel" aria-label="Stock filter configuration">
           <ConditionSelector
             selectedConditions={selectedConditions}
@@ -349,7 +345,6 @@ export function StockFilterPage() {
             stocks={selectedStocks}
           />
         </div>
-      </main>
-    </div>
+    </main>
   )
 }

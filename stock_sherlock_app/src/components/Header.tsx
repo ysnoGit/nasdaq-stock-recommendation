@@ -1,7 +1,12 @@
 import { SearchCheck } from 'lucide-react'
-import { NavigationTabs } from './NavigationTabs'
+import { NavigationTabs, type AppPage } from './NavigationTabs'
 
-export function Header() {
+type HeaderProps = {
+  activePage: AppPage
+  onNavigate: (page: AppPage) => void
+}
+
+export function Header({ activePage, onNavigate }: HeaderProps) {
   return (
     <header className="app-header">
       <div className="brand-lockup">
@@ -10,7 +15,7 @@ export function Header() {
         </span>
         <h1>Stock Sherlock</h1>
       </div>
-      <NavigationTabs />
+      <NavigationTabs activePage={activePage} onNavigate={onNavigate} />
     </header>
   )
 }
