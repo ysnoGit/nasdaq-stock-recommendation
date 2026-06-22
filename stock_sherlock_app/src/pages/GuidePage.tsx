@@ -204,15 +204,18 @@ export function GuidePage({ onOpenFilter }: GuidePageProps) {
 
       <section className="guide-section guide-value-section" aria-labelledby="value-title">
         <div className="guide-section-heading">
-          <p className="guide-eyebrow">Why this project matters</p>
-          <h2 id="value-title">A repeatable answer to a noisy research problem</h2>
+          <p className="guide-eyebrow">Practical screening value</p>
+          <h2 id="value-title">Turn a broad market into a defensible research queue</h2>
         </div>
         <div className="guide-value-grid">
-          <p>Manual screeners often hide timing assumptions and make multi-signal research difficult to reproduce. Stock Sherlock separates setup dates from confirmation dates, exposes every user-controlled threshold, and preserves the same rules from data processing to the serving layer.</p>
+          <div className="guide-value-copy">
+            <p>The difficult part of stock research is not finding more data. It is deciding which companies deserve attention without relying on an opaque score. Stock Sherlock converts explicit research ideas—sustained growth, exceptional trading activity, or confirmed price transitions—into a focused shortlist.</p>
+            <p>Every threshold, inspection date, setup, and confirmation remains visible. This lets a user compare screening strictness, revisit historical signals, and explain why a company appeared before beginning deeper qualitative or valuation research.</p>
+          </div>
           <ul>
-            <li><CheckCircle2 aria-hidden="true" size={17} />Parameter-driven, explainable screening</li>
-            <li><CheckCircle2 aria-hidden="true" size={17} />Point-in-time daily and weekly confirmation logic</li>
-            <li><CheckCircle2 aria-hidden="true" size={17} />Cloud pipeline with validation and stable serving contracts</li>
+            <li><CheckCircle2 aria-hidden="true" size={17} />Reduce thousands of securities to candidates supported by explicit evidence</li>
+            <li><CheckCircle2 aria-hidden="true" size={17} />See how parameter choices change coverage before trusting a threshold</li>
+            <li><CheckCircle2 aria-hidden="true" size={17} />Reproduce the same screen across dates instead of relying on manual judgment</li>
           </ul>
         </div>
         <aside className="guide-data-note">

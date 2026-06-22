@@ -428,6 +428,10 @@ select:focus-visible {
   font-size: 14px;
 }
 
+.guide-value-copy p:last-child {
+  margin-bottom: 0;
+}
+
 .guide-value-grid ul {
   display: flex;
   flex-direction: column;
