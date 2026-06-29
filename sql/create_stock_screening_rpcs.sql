@@ -926,6 +926,25 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.screen_data_availability()
+RETURNS TABLE (
+    latest_daily_date date,
+    latest_weekly_date date,
+    latest_annual_fundamental_date date,
+    latest_quarterly_fundamental_date date
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+SET statement_timeout = '5s'
+AS $$
+    SELECT
+        (SELECT max(snapshot_date) FROM public.security_daily_feature_snapshot),
+        (SELECT max(week_end_date) FROM public.security_weekly_feature_snapshot),
+        (SELECT max(datadate) FROM public.annual_growth_history),
+        (SELECT max(datadate) FROM public.quarterly_growth_history);
+$$;
+
 REVOKE ALL ON FUNCTION public.screen_company_counts(
     date, date, date, integer, boolean, boolean, boolean, boolean, boolean,
     double precision, integer, double precision, integer, double precision,
@@ -946,6 +965,8 @@ GRANT EXECUTE ON FUNCTION public.screen_companies_for_date(
     double precision, integer, double precision, integer, double precision,
     double precision, boolean
 ) TO anon, authenticated;
+REVOKE ALL ON FUNCTION public.screen_data_availability() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.screen_data_availability() TO anon, authenticated;
 
 -- Retire browser access to the obsolete combined A+B overloads.
 REVOKE ALL ON FUNCTION public.screen_company_counts(

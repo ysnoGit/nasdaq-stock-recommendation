@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Filter } from 'lucide-react'
 import { ConditionSelector } from '../components/ConditionSelector'
 import { ParameterPanel } from '../components/ParameterPanel'
@@ -12,6 +12,7 @@ import {
 import {
   fetchCompaniesForDate,
   fetchCompanyCounts,
+  fetchScreeningDataAvailability,
 } from '../services/screening'
 import type {
   ConditionCategory,
@@ -20,6 +21,7 @@ import type {
   FundamentalInspection,
   ParameterValue,
   ResultChartPoint,
+  ScreeningDataAvailability,
   ScreeningParameters,
   ScreeningRequest,
   SelectedStock,
@@ -27,6 +29,8 @@ import type {
 
 const MILLISECONDS_PER_DAY = 86_400_000
 const MAX_INSPECTION_DAYS = 90
+
+const MARKET_CONDITIONS: ConditionCategory[] = ['volume', 'dailyPrice', 'weeklyPrice']
 
 function toDateInputValue(date: Date): string {
   const year = date.getFullYear()
@@ -63,6 +67,40 @@ function quarterEndDate(year: number, quarter: number): string {
   return `${year}-${monthAndDay}`
 }
 
+function earlierDate(first: string, second: string): string {
+  return first <= second ? first : second
+}
+
+function marketMaximumDate(
+  selectedConditions: Set<ConditionCategory>,
+  availability: ScreeningDataAvailability | null,
+  browserToday: string,
+): string {
+  const usesDailyAnchors = selectedConditions.has('volume') || selectedConditions.has('dailyPrice')
+  const usesWeeklyOnly = selectedConditions.has('weeklyPrice') && !usesDailyAnchors
+  const dataMaximum = usesWeeklyOnly
+    ? availability?.latestWeeklyDate
+    : usesDailyAnchors
+      ? availability?.latestDailyDate
+      : null
+
+  return dataMaximum ? earlierDate(dataMaximum, browserToday) : browserToday
+}
+
+function clampMarketDateRange(dateRange: DateRange, maximumDate: string): DateRange {
+  const clampDate = (value: string) => {
+    if (value < MARKET_INSPECTION_MIN_DATE) return MARKET_INSPECTION_MIN_DATE
+    if (value > maximumDate) return maximumDate
+    return value
+  }
+  const endDate = clampDate(dateRange.endDate)
+  const startDate = clampDate(dateRange.startDate)
+  return {
+    startDate: startDate > endDate ? endDate : startDate,
+    endDate,
+  }
+}
+
 function validateDateRange(
   dateRange: DateRange,
   maximumDate: string,
@@ -84,7 +122,10 @@ function validateDateRange(
     dateRange.endDate > maximumDate ||
     (!isFundamentalOnly && dateRange.startDate > maximumDate)
   ) {
-    return { inclusiveDayCount: null, message: 'Inspection dates cannot be in the future.' }
+    return {
+      inclusiveDayCount: null,
+      message: `Inspection dates cannot be after ${maximumDate}, the latest available market data date.`,
+    }
   }
 
   if (isFundamentalOnly) {
@@ -120,7 +161,7 @@ function validateDateRange(
 }
 
 export function StockFilterPage() {
-  const maximumDate = toDateInputValue(new Date())
+  const browserToday = toDateInputValue(new Date())
   const [selectedConditions, setSelectedConditions] = useState<Set<ConditionCategory>>(
     new Set(),
   )
@@ -137,28 +178,60 @@ export function StockFilterPage() {
   const [resultStatus, setResultStatus] = useState<EvaluationStatus | null>(null)
   const [isFiltering, setIsFiltering] = useState(false)
   const [isLoadingStocks, setIsLoadingStocks] = useState(false)
+  const [dataAvailability, setDataAvailability] =
+    useState<ScreeningDataAvailability | null>(null)
   const [filterError, setFilterError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const isFundamentalScreen = selectedConditions.has('annualFundamental')
     || selectedConditions.has('quarterlyFundamental')
   const hasMarketSelection = [...selectedConditions].some((category) =>
-    category === 'volume' || category === 'dailyPrice' || category === 'weeklyPrice',
+    MARKET_CONDITIONS.includes(category),
   )
+  const maximumDate = marketMaximumDate(selectedConditions, dataAvailability, browserToday)
   const marketMinimumDate =
     hasMarketSelection
       ? MARKET_INSPECTION_MIN_DATE
       : undefined
+  const activeDateRange = useMemo(
+    () =>
+      hasMarketSelection
+        ? clampMarketDateRange(dateRange, maximumDate)
+        : dateRange,
+    [dateRange, hasMarketSelection, maximumDate],
+  )
 
   const dateValidation = useMemo(
     () =>
       validateDateRange(
-        dateRange,
+        activeDateRange,
         maximumDate,
         false,
         marketMinimumDate,
       ),
-    [dateRange, marketMinimumDate, maximumDate],
+    [activeDateRange, marketMinimumDate, maximumDate],
   )
+
+  useEffect(() => {
+    let isMounted = true
+    fetchScreeningDataAvailability()
+      .then((availability) => {
+        if (isMounted) setDataAvailability(availability)
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setFilterError(
+            error instanceof Error
+              ? `Could not load market data availability: ${error.message}`
+              : 'Could not load market data availability.',
+          )
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
   const fundamentalValidationMessage = useMemo(() => {
     if (!isFundamentalScreen) return null
     const year = Number(fundamentalInspection.throughYear)
@@ -236,7 +309,7 @@ export function StockFilterPage() {
     if (!canFilter) return
 
     const request: ScreeningRequest = {
-      dateRange: { ...dateRange },
+      dateRange: { ...activeDateRange },
       fundamentalInspection: { ...fundamentalInspection },
       parameters: { ...parameters },
       selectedConditions: [...selectedConditions],
@@ -292,7 +365,7 @@ export function StockFilterPage() {
             onToggle={toggleCondition}
           />
           <ParameterPanel
-            dateRange={dateRange}
+            dateRange={activeDateRange}
             fundamentalInspection={fundamentalInspection}
             fundamentalValidationMessage={fundamentalValidationMessage}
             inclusiveDayCount={dateValidation.inclusiveDayCount}

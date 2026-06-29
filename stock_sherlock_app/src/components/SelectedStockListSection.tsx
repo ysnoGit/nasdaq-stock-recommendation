@@ -31,6 +31,12 @@ const formatVolume = (value: number | null) =>
 const cleanCell = (value: string | number | null) =>
   value === null ? '' : String(value).replace(/[\t\r\n]+/g, ' ')
 
+const yahooFinanceUrl = (ticker: string) => {
+  const normalizedTicker = ticker.trim()
+  if (!normalizedTicker || normalizedTicker === '—') return null
+  return `https://finance.yahoo.com/quote/${encodeURIComponent(normalizedTicker)}/`
+}
+
 async function writeClipboard(text: string): Promise<void> {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(text)
@@ -191,15 +197,32 @@ export function SelectedStockListSection({
                 </thead>
                 <tbody>
                   {stocks.map((stock) => (
-                    <tr key={`${stock.date}-${stock.ticker}`}>
-                      <td>{stock.companyName}</td>
-                      <td className="ticker-cell">{stock.ticker}</td>
-                      <td>{formatPrice(stock.open)}</td>
-                      <td>{formatPrice(stock.high)}</td>
-                      <td>{formatPrice(stock.low)}</td>
-                      <td>{formatPrice(stock.close)}</td>
-                      <td>{formatVolume(stock.volume)}</td>
-                    </tr>
+                    (() => {
+                      const tickerUrl = yahooFinanceUrl(stock.ticker)
+                      return (
+                        <tr key={`${stock.date}-${stock.ticker}`}>
+                          <td>{stock.companyName}</td>
+                          <td className="ticker-cell">
+                            {tickerUrl ? (
+                              <a
+                                href={tickerUrl}
+                                rel="noopener noreferrer"
+                                target="_blank"
+                              >
+                                {stock.ticker}
+                              </a>
+                            ) : (
+                              stock.ticker
+                            )}
+                          </td>
+                          <td>{formatPrice(stock.open)}</td>
+                          <td>{formatPrice(stock.high)}</td>
+                          <td>{formatPrice(stock.low)}</td>
+                          <td>{formatPrice(stock.close)}</td>
+                          <td>{formatVolume(stock.volume)}</td>
+                        </tr>
+                      )
+                    })()
                   ))}
                 </tbody>
               </table>

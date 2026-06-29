@@ -1122,6 +1122,17 @@ select:focus-visible {
   font-weight: 720;
 }
 
+.ticker-cell a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.ticker-cell a:hover,
+.ticker-cell a:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 @media (max-width: 980px) {
   .dashboard-layout {
     grid-template-columns: minmax(0, 1fr);

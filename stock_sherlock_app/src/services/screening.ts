@@ -2,6 +2,7 @@ import { getSupabaseClient } from '../lib/supabase'
 import type {
   EvaluationStatus,
   ResultChartPoint,
+  ScreeningDataAvailability,
   ScreeningRequest,
   SelectedStock,
 } from '../types/screening'
@@ -24,6 +25,13 @@ interface DetailRpcRow {
   low_price: number | null
   close_price: number | null
   volume: number | null
+}
+
+interface AvailabilityRpcRow {
+  latest_daily_date: string | null
+  latest_weekly_date: string | null
+  latest_annual_fundamental_date: string | null
+  latest_quarterly_fundamental_date: string | null
 }
 
 function rpcParameters(request: ScreeningRequest) {
@@ -80,6 +88,19 @@ export async function fetchCompanyCounts(
     selectedCompanyCount: row.selected_company_count,
     evaluationStatus: row.evaluation_status,
   }))
+}
+
+export async function fetchScreeningDataAvailability(): Promise<ScreeningDataAvailability> {
+  const { data, error } = await getSupabaseClient().rpc('screen_data_availability')
+
+  if (error) throw new Error(error.message)
+  const row = ((data ?? []) as AvailabilityRpcRow[])[0]
+  return {
+    latestDailyDate: row?.latest_daily_date ?? null,
+    latestWeeklyDate: row?.latest_weekly_date ?? null,
+    latestAnnualFundamentalDate: row?.latest_annual_fundamental_date ?? null,
+    latestQuarterlyFundamentalDate: row?.latest_quarterly_fundamental_date ?? null,
+  }
 }
 
 export async function fetchCompaniesForDate(

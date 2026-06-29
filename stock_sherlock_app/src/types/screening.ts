@@ -59,6 +59,13 @@ export interface SelectedStock {
   volume: number | null
 }
 
+export interface ScreeningDataAvailability {
+  latestDailyDate: string | null
+  latestWeeklyDate: string | null
+  latestAnnualFundamentalDate: string | null
+  latestQuarterlyFundamentalDate: string | null
+}
+
 export interface ScreeningRequest {
   dateRange: DateRange
   fundamentalInspection: FundamentalInspection
