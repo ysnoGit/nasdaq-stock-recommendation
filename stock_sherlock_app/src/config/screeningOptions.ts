@@ -29,8 +29,8 @@ export const ANNUAL_GROWTH_OPTIONS = percentageOptions([3, 5, 10, 15, 20])
 export const ANNUAL_YEARS_OPTIONS = numberOptions([2, 3, 4])
 export const QUARTERLY_GROWTH_OPTIONS = percentageOptions([3, 5, 10, 15, 20])
 export const QUARTER_COUNT_OPTIONS = numberOptions([2, 3, 4, 5])
-export const VOLUME_RATIO_OPTIONS = numberOptions([5, 10, 15, 20, 25], '×')
-export const SURGE_DAYS_OPTIONS = numberOptions([3, 5, 7])
+export const VOLUME_RATIO_OPTIONS = numberOptions([5, 7, 10, 15, 20, 25], '×')
+export const SURGE_DAYS_OPTIONS = numberOptions([2, 3, 4, 5, 7])
 export const DAILY_TOLERANCE_OPTIONS = percentageOptions([1, 2, 3])
 export const WEEKLY_TOLERANCE_OPTIONS = percentageOptions([1, 2, 3, 4])
 export const FUNDAMENTAL_INSPECTION_PERIOD_OPTIONS = numberOptions([1, 2, 3, 4, 5, 6, 7, 8])
@@ -47,10 +47,10 @@ export const DEFAULT_FUNDAMENTAL_INSPECTION: FundamentalInspection = {
 }
 
 export const DEFAULT_PARAMETERS: ScreeningParameters = {
-  annualGrowthPct: '3',
+  annualGrowthPct: '5',
   annualYears: '4',
-  quarterlyGrowthPct: '5',
-  quarterCount: '3',
+  quarterlyGrowthPct: '3',
+  quarterCount: '2',
   volumeRatioThreshold: '5',
   volumeSurgeMinDays: '3',
   dailyMaTolerancePct: '3',

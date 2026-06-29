@@ -1,7 +1,7 @@
 # Screening Business and Timing Logic Specification
 
 **Status:** Authoritative business-rule reference  
-**Last reviewed:** 2026-06-21<br>
+**Last reviewed:** 2026-06-29<br>
 **Scope:** Conditions A-H, component screens, coverage studies, and backtest outcomes
 
 ## Purpose
@@ -37,6 +37,8 @@ test.
    based on fixed thresholds are not final screening truth.
 6. Dates must describe the data actually used. Weekly dates must be real
    exchange trading sessions, including holiday-shortened weeks.
+7. A market-condition candidate with close price below `$5.00` is
+   automatically excluded from screening counts and selected-company lists.
 
 ## Shared Date Definitions
 
@@ -97,6 +99,23 @@ on the actionable confirmation date after every required condition is known.
 When a required future confirmation row is not yet available as of the data
 snapshot, the candidate is pending/not evaluable. It must not be treated as a
 confirmed pass or a confirmed failure.
+
+### Price-Floor Eligibility
+
+**DECIDED**
+
+Market-condition screening results apply a fixed `$5.00` minimum close price
+filter before counting or displaying companies:
+
+- Market-condition screens use the close price on the inspection anchor row.
+  For standalone weekly screens, this is the weekly close price for the G setup
+  week.
+- Market candidates below the price floor are not counted in chart points and
+  do not appear in the selected-company table.
+
+The price floor is currently fixed, not user-selectable. Fundamental-only
+screens do not apply the price floor until a historical quarter-end price
+serving table is available.
 
 ### Mixed-Frequency G&H Gate
 
@@ -598,10 +617,10 @@ Confirmed C&D coverage parameter choices:
 
 | Parameter | Choices |
 |---|---|
-| `volume_ratio_threshold` | 4, 5, 10, 15, 20, 25 |
-| `volume_surge_min_days` | 3, 5, 7 |
+| `volume_ratio_threshold` | 4, 5, 7, 10, 15, 20, 25 |
+| `volume_surge_min_days` | 2, 3, 4, 5, 7 |
 
-This creates 18 C&D parameter combinations.
+This creates 35 C&D parameter combinations.
 
 The production application will use `security_master` for its current serving
 universe even though the historical coverage and performance studies do not.
@@ -841,9 +860,11 @@ When changing a condition:
 | 2026-06-15 | Apply a 180-calendar-day repeated-selection cooldown per `(parameter combination, gvkey, iid)` in component performance studies. |
 | 2026-06-15 | Component performance tests use the top three coverage combinations per group and measure 30–180 calendar-day returns without a common group end date. |
 | 2026-06-14 | Preserve unresolved component-screen timing choices as explicit pending decisions. |
-| 2026-06-14 | C&D coverage evaluates every eligible trading date, uses all companies represented in daily features, counts distinct `gvkey`, and targets an average of 30 selections across 18 parameter combinations. |
+| 2026-06-14 | C&D coverage evaluates every eligible trading date, uses all companies represented in daily features, counts distinct `gvkey`, and targets an average of 30 selections across the configured parameter grid. |
 | 2026-06-14 | Historical C&D coverage does not apply current `security_master` filtering; the production application will use `security_master`. |
 | 2026-06-14 | Added `4` as a C&D `volume_ratio_threshold` coverage-study choice. |
+| 2026-06-29 | Added `7` as a C&D `volume_ratio_threshold` application choice. |
+| 2026-06-29 | Added `2` and `4` as C&D `volume_surge_min_days` application choices. |
 | 2026-06-15 | Daily MA20/MA50/MA100 remain undefined until their complete 20/50/100 valid-price windows exist; incomplete-window securities are not eligible for E/F. |
 | 2026-06-15 | `volume_ma30` and `volume_ratio` remain undefined until exactly 30 valid prior-volume rows exist; incomplete-window securities are not eligible for C/D. |
 | 2026-06-15 | Daily MAs depend only on valid price rows; missing volume does not affect E/F eligibility. |

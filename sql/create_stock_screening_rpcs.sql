@@ -264,6 +264,7 @@ AS $$
         CROSS JOIN settings s
         JOIN public.security_master sm USING (gvkey, iid)
         WHERE (NOT p_exclude_universe OR NOT coalesce(sm.is_excluded_universe, false))
+          AND c.close_price >= 5.0
           AND (
               NOT p_use_volume OR (
                   c.volume_ratio >= p_volume_ratio_threshold
