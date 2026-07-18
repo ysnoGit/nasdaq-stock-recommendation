@@ -624,7 +624,7 @@ Confirmed C&D coverage parameter choices:
 | Parameter | Choices |
 |---|---|
 | `volume_ratio_threshold` | 4, 5, 7, 10, 15, 20, 25 |
-| `volume_surge_min_days` | 2, 3, 4, 5, 7 |
+| `volume_surge_min_days` | 1, 2, 3, 4, 5, 7 |
 
 This creates 35 C&D parameter combinations.
 
@@ -644,7 +644,7 @@ The existing full A-F/A-H backtest grid contains 192 combinations:
 | `annual_years` | 2, 3 |
 | `quarter_count` | 2, 3, 4 |
 | `volume_ratio_threshold` | 2, 3, 4, 5 |
-| `volume_surge_min_days` | 2, 3 |
+| `volume_surge_min_days` | 1, 2, 3 |
 | `daily_ma_tolerance_pct` | fixed at 1 |
 | `weekly_ma_tolerance_pct` | fixed at 2 |
 
@@ -871,6 +871,7 @@ When changing a condition:
 | 2026-06-14 | Added `4` as a C&D `volume_ratio_threshold` coverage-study choice. |
 | 2026-06-29 | Added `7` as a C&D `volume_ratio_threshold` application choice. |
 | 2026-06-29 | Added `2` and `4` as C&D `volume_surge_min_days` application choices. |
+| 2026-07-18 | Added `1` as a C&D `volume_surge_min_days` application choice for single-day volume-ratio screening. |
 | 2026-06-15 | Daily MA20/MA50/MA100 remain undefined until their complete 20/50/100 valid-price windows exist; incomplete-window securities are not eligible for E/F. |
 | 2026-06-15 | `volume_ma30` and `volume_ratio` remain undefined until exactly 30 valid prior-volume rows exist; incomplete-window securities are not eligible for C/D. |
 | 2026-06-15 | Daily MAs depend only on valid price rows; missing volume does not affect E/F eligibility. |

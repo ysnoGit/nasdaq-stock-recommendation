@@ -58,7 +58,7 @@ const conditionGroups: ConditionGuideGroup[] = [
         description: 'Checks whether that same security reached the selected volume multiple on at least the chosen number of days during the trailing three calendar months.',
       },
     ],
-    parameters: ['Volume ratio: 5x, 7x, 10x, 15x, 20x, 25x', 'Minimum surge days: 2, 3, 4, 5, 7'],
+    parameters: ['Volume ratio: 5x, 7x, 10x, 15x, 20x, 25x', 'Minimum surge days: 1, 2, 3, 4, 5, 7'],
   },
   {
     code: 'E-F',
