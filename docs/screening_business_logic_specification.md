@@ -39,6 +39,9 @@ test.
    exchange trading sessions, including holiday-shortened weeks.
 7. A market-condition candidate with close price below `$5.00` is
    automatically excluded from screening counts and selected-company lists.
+8. A market-condition candidate with trading value below `$1,000,000`
+   (`close price * volume`) is automatically excluded from screening counts
+   and selected-company lists.
 
 ## Shared Date Definitions
 
@@ -100,22 +103,25 @@ When a required future confirmation row is not yet available as of the data
 snapshot, the candidate is pending/not evaluable. It must not be treated as a
 confirmed pass or a confirmed failure.
 
-### Price-Floor Eligibility
+### Market Liquidity Eligibility
 
 **DECIDED**
 
 Market-condition screening results apply a fixed `$5.00` minimum close price
-filter before counting or displaying companies:
+filter and a fixed `$1,000,000` minimum trading-value filter before counting or
+displaying companies:
 
 - Market-condition screens use the close price on the inspection anchor row.
   For standalone weekly screens, this is the weekly close price for the G setup
   week.
-- Market candidates below the price floor are not counted in chart points and
-  do not appear in the selected-company table.
+- Trading value is `close price * volume` on the same candidate row. For
+  standalone weekly screens, this uses weekly close price and weekly volume.
+- Market candidates below either liquidity floor are not counted in chart
+  points and do not appear in the selected-company table.
 
-The price floor is currently fixed, not user-selectable. Fundamental-only
-screens do not apply the price floor until a historical quarter-end price
-serving table is available.
+The price and trading-value floors are currently fixed, not user-selectable.
+Fundamental-only screens do not apply these liquidity filters until a historical
+quarter-end price serving table is available.
 
 ### Mixed-Frequency G&H Gate
 
