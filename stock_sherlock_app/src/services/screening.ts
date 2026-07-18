@@ -52,7 +52,7 @@ function rpcParameters(request: ScreeningRequest) {
     p_volume_surge_min_days: Number(parameters.volumeSurgeMinDays),
     p_daily_ma_tolerance_pct: Number(parameters.dailyMaTolerancePct),
     p_weekly_ma_tolerance_pct: Number(parameters.weeklyMaTolerancePct),
-    p_exclude_universe: false,
+    p_exclude_universe: true,
   }
 }
 
